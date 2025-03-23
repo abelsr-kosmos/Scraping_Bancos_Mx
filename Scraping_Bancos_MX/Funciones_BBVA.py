@@ -248,7 +248,6 @@ def incluir_anio(df,anio_inicio,campo_fecha):
 
 
 def analizar_estados(documento):
-    documento = pdfplumber.open(documento)
     movimientos = False
     df_movimientos = pd.DataFrame()
     fecha_estado_de_cuenta = ""

@@ -87,10 +87,7 @@ def analizar_estados(estado):
 
     df = incluir_movimientos(df)
     df = unificar_tabla(df)
-    df = incluir_anio(df, anios)
     df = arreglar_tabla(df)
-
-    #df.to_csv("MovimientosScotiabank.csv", index=False, encoding="latin1")
     return df
     
 
@@ -217,22 +214,6 @@ def incluir_movimientos(filas):
         filas.loc[index,"Movimiento"] = contador_movimiento
         
     return filas
-
-def incluir_anio(df, anios):
-    estado_diciembre=False
-    for index, row in df.iterrows():
-        if  re.match("\d{2} \w{3}", row["Fecha"]):
-            if re.search("DIC",row["Fecha"]):
-                
-                df.at[index, "Fecha"] += f"/{anios[0]}"
-                estado_diciembre = True
-            else:
-                if estado_diciembre:
-                    df.at[index, "Fecha"] += f"/{int(anios[0])+1}"
-                else:
-                    df.at[index, "Fecha"] += f"/{anios[0]}"
-
-    return df
 
 def eliminar_movimientos_no_deseados(filas):
     filas = filas.reset_index(drop=True)

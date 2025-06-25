@@ -7,3 +7,5 @@ from .Funciones_Inbursa import *
 from .Funciones_Santander import *
 from .Funciones_Scotiabank import *
 from .Funciones_HeyBanco import *
+from .Funciones_Banamex import *
+from .Funciones_Azteca import *

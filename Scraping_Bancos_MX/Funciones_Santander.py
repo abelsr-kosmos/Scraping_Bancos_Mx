@@ -203,3 +203,112 @@ def unificar_tabla(df):
     for movimiento in df["Movimiento"].unique():
         movimientos_unificados.append(unificar_movimiento(df[df["Movimiento"]==movimiento]))
     return pd.DataFrame(movimientos_unificados)
+
+
+import re
+import logging
+from dataclasses import dataclass, asdict
+from typing import List, Dict, Optional
+import pandas as pd
+
+# Configuración de logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s"
+)
+logger = logging.getLogger(__name__)
+
+# Constantes y regex compilados
+DATE_FOLIO_PATTERN = re.compile(r"^\s*\(?(?P<fecha>\d{2}-[A-Za-z]{3}-\d{4})\)?\s+(?P<folio>\d{7})", flags=re.IGNORECASE)
+MONEY_PATTERN = re.compile(r"(?P<monto>\d{1,3}(?:[.,]\d{3})*[.,]\d{2})")
+
+@dataclass
+class Transaccion:
+    fecha: str
+    folio: str
+    descripcion: str
+    monto: float
+    saldo: float
+
+class ParserTransacciones:
+    """
+    Parser para extraer transacciones de un texto crudo.
+    """
+
+    def __init__(self, texto: str):
+        self.texto = texto
+
+    def separar_grupos(self) -> List[str]:
+        """Divide el texto en grupos iniciando en líneas fecha-folio."""
+        grupos, actual = [], []
+        for linea in self.texto.splitlines():
+            if DATE_FOLIO_PATTERN.match(linea):
+                if actual:
+                    grupos.append("\n".join(actual))
+                actual = [linea]
+            elif actual:
+                actual.append(linea)
+        if actual:
+            grupos.append("\n".join(actual))
+        logger.debug("Divididos en %d grupos", len(grupos))
+        return grupos
+
+    @staticmethod
+    def _normalizar_monto(cadena: str) -> float:
+        """Convierte '1.234.567,89' o '1,234,567.89' a float 1234567.89"""
+        limpio = re.sub(r"[.,](?=\d{3})", "", cadena)
+        if "," in limpio and "." not in limpio:
+            limpio = limpio.replace(',', '.')
+        return float(limpio)
+
+    def parsear_grupo(self, grupo: str) -> Optional[Transaccion]:
+        """Extrae los campos de un grupo de texto."""
+        montos = MONEY_PATTERN.findall(grupo)
+        if len(montos) < 2:
+            logger.warning("Grupo con menos de 2 montos omitido")
+            return None
+
+        # Encuentra fecha y folio
+        encabezado = grupo.replace('(', '').replace(')', '')
+        coincidencia = DATE_FOLIO_PATTERN.search(encabezado)
+        if not coincidencia:
+            logger.error("No se encontró fecha/folio en grupo")
+            return None
+
+        fecha = coincidencia.group('fecha')
+        folio = coincidencia.group('folio')
+
+        # Montos
+        monto_str, saldo_str = montos[0], montos[1]
+        monto = self._normalizar_monto(monto_str)
+        saldo = self._normalizar_monto(saldo_str)
+
+        # Descripción: texto entre folio y primer monto
+        inicio = coincidencia.end()
+        descripcion = grupo[inicio:].split(monto_str)[0].strip().replace('\n', ' ')
+
+        return Transaccion(
+            fecha=fecha,
+            folio=folio,
+            descripcion=descripcion,
+            monto=monto,
+            saldo=saldo
+        )
+
+    def to_dataframe(self) -> pd.DataFrame:
+        """Devuelve un DataFrame con todas las transacciones parseadas."""
+        grupos = self.separar_grupos()
+        transacciones = [self.parsear_grupo(g) for g in grupos]
+        registros = [asdict(t) for t in transacciones if t]
+        df = pd.DataFrame(registros)
+
+        # Cálculo de depósitos y retiros
+        df['saldo_previo'] = df['saldo'].shift(1)
+        df['delta_saldo'] = df['saldo'] - df['saldo_previo']
+        df['monto_signado'] = df['monto'] * df['delta_saldo'].apply(lambda x: -1 if x < 0 else 1)
+        df['deposito'] = df['monto_signado'].clip(lower=0)
+        df['retiro'] = (-df['monto_signado']).clip(lower=0)
+
+        # Selección y renombrado de columnas finales en español
+        df_final = df[['fecha', 'folio', 'descripcion', 'deposito', 'retiro', 'saldo']]
+        return df_final

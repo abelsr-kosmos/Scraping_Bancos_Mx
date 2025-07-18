@@ -4,11 +4,11 @@ from setuptools import find_packages, setup
 
 HERE = pathlib.Path(__file__).parent
 
-VERSION = '0.0.1' 
+VERSION = '0.1.0' 
 PACKAGE_NAME = 'Scraping_Bancos_MX' 
-AUTHOR = 'Luis Mauricio Castro Gutierrez' 
-AUTHOR_EMAIL = 'mauricioyzro@gmail.com' 
-URL = 'https://github.com/mau-castro' 
+AUTHOR = 'Abel Santillan Rodriguez' 
+AUTHOR_EMAIL = 'abelsantillanrdz@gmail.com' 
+URL = 'https://github.com/abelsr-kosmos/Scraping_Bancos_Mx' 
 
 LICENSE = 'MIT' #Tipo de licencia
 DESCRIPTION = 'Librería para extraer datos de movimientos de los estados de cuenta de bancos Mexicanos' #Descripción corta

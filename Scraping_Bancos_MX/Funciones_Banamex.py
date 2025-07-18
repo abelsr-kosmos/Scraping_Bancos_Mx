@@ -242,3 +242,100 @@ def procesar_pdf(pdf_path):
     df = df[df["Retiro"].notna() | df["Deposito"].notna() | df["Saldo"].notna()]
 
     return df
+
+class TransactionsParser:
+    """
+    Parser para renders de estados de cuenta en texto plano.
+
+    Ejemplo de uso:
+    >>> parser = TransactionsParser()
+    >>> df = parser.parse(render_text)
+    """
+    MONTHS = ['ENE', 'FEB', 'MAR', 'ABR', 'MAY', 'JUN',
+              'JUL', 'AGO', 'SEP', 'OCT', 'NOV', 'DIC']
+
+    def __init__(self) -> None:
+        # Compilamos patrones una sola vez para eficiencia
+        months_pattern = '|'.join(self.MONTHS)
+        self.date_pattern = re.compile(rf'\b\d{{2}}\s(?:{months_pattern})\b')
+        self.money_pattern = re.compile(r'\$?\d{1,3}(?:,\d{3})*\.\d{2}')
+
+    # ---------- Paso 2 ----------
+    def _split_transactions(self, render: str) -> list[str]:
+        """
+        Divide el texto completo en bloques que inician con una fecha.
+        """
+        matches = list(self.date_pattern.finditer(render))
+        splits = []
+
+        for i, match in enumerate(matches):
+            start = match.start()
+            end = matches[i + 1].start() if i + 1 < len(matches) else len(render)
+            block = render[start:end].strip()
+            if block:
+                splits.append(block)
+        return splits
+
+    # ---------- Paso 3 ----------
+    def _extract_transaction(self, block: str) -> dict:
+        """
+        Extrae la información de un bloque y la devuelve como dict.
+        """
+        fecha_match = re.search(r'\d{2} \w{3}', block)
+        if not fecha_match:
+            raise ValueError(f"Fecha no encontrada en bloque:\n{block}")
+
+        fecha = fecha_match.group()
+        montos = self.money_pattern.findall(block)
+
+        # Limpiar descripción
+        description = block.replace(fecha, "")
+        for monto in montos:
+            description = description.replace(monto, "")
+        description = description.replace("\n", " ").strip()
+
+        return {
+            "fecha": fecha,
+            "description": description,
+            "monto": montos[-2] if len(montos) > 1 else None,
+            "saldo": montos[-1]
+        }
+
+    # ---------- Paso 4 ----------
+    @staticmethod
+    def _build_dataframe(transactions: list[dict]) -> pd.DataFrame:
+        df = pd.DataFrame(transactions)
+
+        # Limpiar símbolo $ y comas, convertir a float
+        to_float = lambda x: float(x.replace('$', '').replace(',', '')) if pd.notnull(x) else x
+        df['monto'] = df['monto'].apply(to_float)
+        df['saldo'] = df['saldo'].apply(to_float)
+
+        # Asignar signo a 'monto'
+        saldo_val = 0.0
+        for idx, row in df.iterrows():
+            if row['monto'] is None:
+                continue
+            if row['saldo'] > saldo_val:
+                df.at[idx, 'monto'] = row['monto']    # Depósito
+            else:
+                df.at[idx, 'monto'] = -row['monto']   # Retiro
+            saldo_val = row['saldo']
+
+        # Separar retiros y depósitos
+        df['retiros'] = df['monto'].apply(lambda x: abs(x) if x < 0 else None)
+        df['depositos'] = df['monto'].apply(lambda x: abs(x) if x > 0 else None)
+        df = df.drop(columns=['monto'])
+
+        # Orden final de columnas
+        df = df[['fecha', 'description', 'retiros', 'depositos', 'saldo']]
+        return df
+
+    # ---------- Paso 5 ----------
+    def parse(self, render: str) -> pd.DataFrame:
+        """
+        Orquesta todo el flujo: recibe texto, devuelve DataFrame listo.
+        """
+        blocks = self._split_transactions(render)
+        transactions = [self._extract_transaction(b) for b in blocks]
+        return self._build_dataframe(transactions)

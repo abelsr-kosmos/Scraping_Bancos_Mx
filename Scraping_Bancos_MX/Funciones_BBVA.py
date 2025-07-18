@@ -1,7 +1,8 @@
+import re
+from typing import Any, Dict, List
+
 import pdfplumber
 import pandas as pd
-import math
-import re
 
 def Scrap_Estado(ruta_archivo):
     estado = pdfplumber.open(ruta_archivo)
@@ -388,3 +389,102 @@ def analisis_tipo_movimiento(df):
             df.loc[index,"TipoMovimiento"] = "OTRO"
     return df
 
+
+class BBVAExtractor:
+    # 1️⃣ Constantes de clase
+    months: List[str] = [
+        'ENE','FEB','MAR','ABR','MAY','JUN',
+        'JUL','AGO','SEP','OCT','NOV','DIC'
+    ]
+    months_pattern: str = '|'.join(months)
+    double_date_pattern: str = rf"\b\d{{2}}/({months_pattern})\b\s+\d{{2}}/({months_pattern})\b"
+    money_regex: str = r'\b\d{1,3}(?:,\d{3})*\.\d{2}\b'
+
+    def __init__(self, text: str, ocr: dict):
+        self.text = text
+        self.ocr  = ocr
+        self.flattened_ocr: pd.DataFrame = pd.DataFrame()
+
+    def _flatten_ocr(self) -> None:
+        """Aplana el OCR en un DataFrame ['word','geometry']"""
+        words: List[tuple] = []
+        for page in self.ocr:
+            for item in page['items']:
+                for block in item['blocks']:
+                    for line in block['lines']:
+                        for word in line['words']:
+                            words.append((word['value'], word['geometry']))
+        self.flattened_ocr = pd.DataFrame(words, columns=['word','geometry'])
+
+    def _split_text(self) -> List[str]:
+        """Divide el texto en fragmentos que empiezan con un par de fechas"""
+        matches = list(re.finditer(self.double_date_pattern, self.text))
+        if not matches:
+            return [self.text.strip()]
+
+        parts: List[str] = []
+        for i, m in enumerate(matches):
+            start = m.start()
+            end   = matches[i+1].start() if i+1 < len(matches) else len(self.text)
+            parts.append(self.text[start:end].strip())
+        return parts
+
+    def _build_dataframe(self, parts: List[str]) -> pd.DataFrame:
+        """Extrae fecha, montos, saldo y geometrías, y genera el DataFrame final"""
+        movimientos: List[Dict[str, Any]] = []
+
+        for fragment in parts:
+            # 📅 Fecha
+            fecha = re.search(self.double_date_pattern, fragment).group().split()[0]
+            # 💰 Montos con dos decimales
+            montos = re.findall(self.money_regex, fragment)
+            # 📐 Geometrías
+            geoms = self.flattened_ocr.loc[
+                self.flattened_ocr['word'].isin(montos),
+                'geometry'
+            ].tolist()
+            # limpiamos para no volver a reutilizar
+            self.flattened_ocr = self.flattened_ocr[~self.flattened_ocr['word'].isin(montos)]
+
+            movimientos.append({
+                "fecha":      fecha,
+                "descripcion": fragment,
+                "monto":      montos[0],
+                "saldo":      montos[2] if len(montos)>2 else None,
+                "geometry":   geoms
+            })
+
+        df = pd.DataFrame(movimientos)
+        # 🔄 Postprocesado
+        df['monto'] = df['monto'].str.replace(',','').astype(float)
+        if df['saldo'].notnull().any():
+            df['saldo'] = df['saldo'].str.replace(',','').astype(float)
+        df['x0_pos'] = df['geometry'].apply(lambda g: g[0][0] if g else None)
+        df['x1_pos'] = df['geometry'].apply(lambda g: g[0][2] if g else None)
+        df['x_pos']  = (df['x0_pos'] + df['x1_pos'])/2
+
+        # Determinar signo según posición
+        df['monto'] = df.apply(
+            lambda r: r['monto'] if pd.isnull(r['x_pos'])
+                      else ( r['monto'] if r['x_pos']>0.68 else -r['monto'] ),
+            axis=1
+        )
+        df['cargo']      = df['monto'].apply(lambda v: abs(v) if v<0 else 0)
+        df['abono']      = df['monto'].apply(lambda v: v if v>0 else 0)
+        df['confidence'] = df['x_pos'].notnull()
+
+        return df[['fecha','descripcion','cargo','abono','saldo','confidence']]
+
+    def extract(self) -> pd.DataFrame:
+        """Método interno que corre todo el pipeline"""
+        self._flatten_ocr()
+        partes = self._split_text()
+        return self._build_dataframe(partes)
+
+    @classmethod
+    def parse(cls, text: str, ocr: dict) -> pd.DataFrame:
+        """
+        INTERFAZ PRINCIPAL ► Pasa solo text y ocr, devuelve el DataFrame listo.
+        """
+        extractor = cls(text, ocr)
+        return extractor.extract()

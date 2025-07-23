@@ -31,8 +31,9 @@ def analisis_concepto(df):
             conceptos = row["Concepto"].split("CONCEPTO:")[1]
             concepto = conceptos.split("REFERENCIA")[0]
         elif re.search("PAGO SPEI",row["Concepto"]) and not re.search("COMISION",row["Concepto"]) and not re.search("I.V.A",row["Concepto"]):
-            conceptos = row["Concepto"].split("INST),")[1]
-            concepto = conceptos.split("CVE")[0]
+            # conceptos = row["Concepto"].split("INST),")[1]
+            # concepto = conceptos.split("CVE")[0]
+            concepto = ''.join([i for i in row["Concepto"] if not i.isdigit()])
         try:
             concepto = concepto.replace("|","")
         except:
@@ -50,9 +51,9 @@ def analisis_institucion_contraparte(df):
                 concepto = conceptos.split("HR")[0]
                 df.loc[index,"InstitucionContraparte"] = concepto
         elif re.search("PAGO SPEI",row["Concepto"]) and not re.search("COMISION",row["Concepto"]) and not re.search("I.V.A",row["Concepto"]):
-                conceptos = row["Concepto"].split("IVA:")[1]
-                concepto = conceptos.split("HORA")[0]
-                concepto = ''.join([i for i in concepto if not i.isdigit()])
+                # conceptos = row["Concepto"].split("IVA:")[1]
+                # concepto = conceptos.split("HORA")[0]
+                concepto = ''.join([i for i in row["Concepto"] if not i.isdigit()])
                 try:
                     concepto = concepto.replace("|","")
                     concepto = concepto.replace(".","")
@@ -82,8 +83,7 @@ def analisis_contraparte(df):
                 pass
             df.loc[index,"Contraparte"] = concepto
         elif re.search("PAGO SPEI",row["Concepto"]) and not re.search("COMISION",row["Concepto"]) and not re.search("I.V.A",row["Concepto"]):
-            conceptos = row["Concepto"].split("BENEF:")[1]
-            concepto = conceptos.split("(DA")[0]
+            conceptos = row["Concepto"]
             df.loc[index,"Contraparte"] = concepto
         else:
             df.loc[index,"Contraparte"] = "-"

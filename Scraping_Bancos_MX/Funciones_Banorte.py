@@ -19,7 +19,8 @@ def analisis_movimientos(df):
     return df
 
 def normalizar_tabla(df):
-    df = df.drop('Movimiento', axis=1)
+    if 'Movimiento' in df.columns:
+        df = df.drop('Movimiento', axis=1)
     return df
 
 
@@ -83,7 +84,7 @@ def analisis_contraparte(df):
                 pass
             df.loc[index,"Contraparte"] = concepto
         elif re.search("PAGO SPEI",row["Concepto"]) and not re.search("COMISION",row["Concepto"]) and not re.search("I.V.A",row["Concepto"]):
-            conceptos = row["Concepto"]
+            concepto = row["Concepto"]
             df.loc[index,"Contraparte"] = concepto
         else:
             df.loc[index,"Contraparte"] = "-"

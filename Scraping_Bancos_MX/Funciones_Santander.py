@@ -235,10 +235,11 @@ class ParserTransacciones:
     Parser para extraer transacciones de un texto crudo.
     """
 
-    def __init__(self, texto: str, ocr: dict):
+    def __init__(self, texto: str, ocr: dict | None = None):
         self.texto = texto
         self.ocr = ocr
-        self.flattened_ocr = self.flatten_doctr_ocr(ocr)
+        if ocr:
+            self.flattened_ocr = self.flatten_doctr_ocr(ocr)
 
     def separar_grupos(self) -> List[str]:
         """Divide el texto en grupos iniciando en líneas fecha-folio."""
@@ -290,7 +291,7 @@ class ParserTransacciones:
         descripcion = grupo[inicio:].split(monto_str)[0].strip().replace('\n', ' ')
         
         # Asignar signo al monto
-        if first_movement:
+        if first_movement and self.flattened_ocr is not None:
             word_data = self.flattened_ocr[self.flattened_ocr['word'] == monto_str]
             if (word_data.geometry.values[0][0] + word_data.geometry.values[0][2])/2 > 0.76:
                 monto = -monto

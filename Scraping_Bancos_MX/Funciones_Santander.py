@@ -235,8 +235,10 @@ class ParserTransacciones:
     Parser para extraer transacciones de un texto crudo.
     """
 
-    def __init__(self, texto: str):
+    def __init__(self, texto: str, ocr: dict):
         self.texto = texto
+        self.ocr = ocr
+        self.flattened_ocr = self.flatten_doctr_ocr(ocr)
 
     def separar_grupos(self) -> List[str]:
         """Divide el texto en grupos iniciando en líneas fecha-folio."""
@@ -261,7 +263,7 @@ class ParserTransacciones:
             limpio = limpio.replace(',', '.')
         return float(limpio)
 
-    def parsear_grupo(self, grupo: str) -> Optional[Transaccion]:
+    def parsear_grupo(self, grupo: str, first_movement: bool) -> Optional[Transaccion]:
         """Extrae los campos de un grupo de texto."""
         montos = MONEY_PATTERN.findall(grupo)
         if len(montos) < 2:
@@ -286,6 +288,14 @@ class ParserTransacciones:
         # Descripción: texto entre folio y primer monto
         inicio = coincidencia.end()
         descripcion = grupo[inicio:].split(monto_str)[0].strip().replace('\n', ' ')
+        
+        # Asignar signo al monto
+        if first_movement:
+            word_data = self.flattened_ocr[self.flattened_ocr['word'] == monto_str]
+            if (word_data.geometry.values[0][0] + word_data.geometry.values[0][2])/2 > 0.76:
+                monto = -monto
+            else:
+                monto = monto
 
         return Transaccion(
             fecha=fecha,
@@ -298,7 +308,11 @@ class ParserTransacciones:
     def to_dataframe(self) -> pd.DataFrame:
         """Devuelve un DataFrame con todas las transacciones parseadas."""
         grupos = self.separar_grupos()
-        transacciones = [self.parsear_grupo(g) for g in grupos]
+        first_movement = True
+        transacciones = []
+        for grupo in grupos:
+            transacciones.append(self.parsear_grupo(grupo, first_movement))
+            first_movement = False
         registros = [asdict(t) for t in transacciones if t]
         df = pd.DataFrame(registros)
 
@@ -308,7 +322,23 @@ class ParserTransacciones:
         df['monto_signado'] = df['monto'] * df['delta_saldo'].apply(lambda x: -1 if x < 0 else 1)
         df['deposito'] = df['monto_signado'].clip(lower=0)
         df['retiro'] = (-df['monto_signado']).clip(lower=0)
+        # Unir folio y descripcion en una sola columna
+        df['descripcion'] = df['folio'].astype(str) + ' ' + df['descripcion'].str.replace('\n', ' ')
+        # Eliminar col de folio
+        df = df.drop(columns=['folio'])
 
         # Selección y renombrado de columnas finales en español
-        df_final = df[['fecha', 'folio', 'descripcion', 'deposito', 'retiro', 'saldo']]
+        df_final = df[['fecha', 'descripcion', 'deposito', 'retiro', 'saldo']]
         return df_final
+    
+    def flatten_doctr_ocr(self, doctr_ocr: dict) -> dict:
+        words = []
+        for page in doctr_ocr:
+            for item in page['items']:
+                for block in item['blocks']:
+                    for line in block['lines']:
+                        for word in line['words']:
+                            words.append((word['value'], word['geometry']))
+                            
+        words = pd.DataFrame(words, columns=['word', 'geometry'])
+        return words

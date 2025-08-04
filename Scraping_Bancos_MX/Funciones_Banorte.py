@@ -1,6 +1,8 @@
-import pandas as pd
 import re
+from typing import List, Tuple, Optional
+
 import pdfplumber
+import pandas as pd
 
 def Scrap_Estado(ruta_archivo):
     estado = pdfplumber.open(ruta_archivo)
@@ -248,3 +250,178 @@ def unificar_tabla(df):
     for movimiento in df["Movimiento"].unique():
         movimientos_unificados.append(unificar_movimiento(df[df["Movimiento"]==movimiento]))
     return pd.DataFrame(movimientos_unificados)
+
+class BanorteStatementParser:
+    """
+    Parser de estados Banorte (o similares) que separa transacciones por bloques
+    delimitados por líneas con fecha (p.ej. '09-JUN-25'), detecta montos y saldo,
+    normaliza importes y construye un DataFrame con:
+      - fecha
+      - descripcion
+      - monto (interno)
+      - deposito
+      - retiro
+      - saldo
+    """
+    # Por defecto: 2 dígitos día, 3 letras mes en mayúsculas, 2 dígitos año
+    DATE_PATTERN = r'\d{2}-[A-Z]{3}-\d{2}'
+    # Cantidades como '1,234.56' o '1.234,56' o '1234.56' o '1234,56'
+    AMOUNT_PATTERN = r'(\d{1,3}(?:[.,]\d{3})*[.,]\d{2})'
+
+    def __init__(self, text: str, date_pattern: Optional[str] = None):
+        self.text = text
+        self.date_pattern = date_pattern or self.DATE_PATTERN
+        self._df: Optional[pd.DataFrame] = None
+
+    # ------------ API pública ------------ #
+    def parse(self) -> pd.DataFrame:
+        """Ejecuta el pipeline completo y devuelve el DataFrame final."""
+        dates_positions = self._find_dates_positions()
+        transactions = self._extract_transactions(dates_positions)
+        df = pd.DataFrame(transactions)
+
+        if df.empty:
+            self._df = df
+            return df
+
+        # Normaliza saldo/monto y asigna signo del monto según cambio en saldo
+        df['saldo'] = df['saldo'].apply(self._to_float_safe)
+        df = self._apply_sign_by_balance_delta(df)
+
+        # Deriva columnas deposito / retiro
+        df['retiro'] = df['monto'].apply(
+            lambda x: -x if isinstance(x, (int, float)) and x < 0 else None
+        )
+        df['deposito'] = df['monto'].apply(
+            lambda x: x if isinstance(x, (int, float)) and x > 0 else None
+        )
+
+        # Orden de columnas de salida
+        self._df = df[['fecha', 'descripcion', 'deposito', 'retiro', 'saldo']]
+        
+        # Columnas en Title format
+        self._df.columns = [col.capitalize() for col in self._df.columns]
+        return self._df
+
+    @property
+    def dataframe(self) -> Optional[pd.DataFrame]:
+        """Devuelve el último DataFrame parseado (si ya corriste parse())."""
+        return self._df
+
+    # ------------ Implementación interna ------------ #
+    def _find_dates_positions(self) -> List[Tuple[int, str, str]]:
+        """
+        Devuelve lista de tuplas: (índice_de_línea, línea_completa, fecha_encontrada)
+        """
+        positions: List[Tuple[int, str, str]] = []
+        lines = self.text.split('\n')
+        for i, line in enumerate(lines):
+            matches = re.findall(self.date_pattern, line)
+            if matches:
+                # Si hay varias fechas en la misma línea, tomamos la primera
+                positions.append((i, line, matches[0]))
+        return positions
+
+    def _extract_transactions(self, dates_positions: List[Tuple[int, str, str]]) -> List[dict]:
+        """
+        Construye una lista de transacciones a partir de los bloques entre fechas.
+        Cada bloque va desde una línea con fecha hasta la línea anterior a la siguiente fecha.
+        """
+        if not dates_positions:
+            return []
+
+        lines = self.text.split('\n')
+        transactions = []
+
+        for i in range(len(dates_positions)):
+            current_pos, current_line, current_date = dates_positions[i]
+            next_pos = dates_positions[i + 1][0] if i < len(dates_positions) - 1 else len(lines)
+
+            block_lines = lines[current_pos:next_pos]
+            block_text = '\n'.join(block_lines)
+
+            # La descripción: tomamos la primera línea del bloque sin la fecha
+            descripcion = block_lines[0].replace(current_date, '').strip()
+
+            # Tomamos cantidades del inicio del bloque (recorte evita agarrar de más)
+            amounts = re.findall(self.AMOUNT_PATTERN, block_text[:250])
+
+            saldo = amounts[-1] if amounts else None
+            monto = amounts[-2] if len(amounts) > 1 else None
+
+            transactions.append({
+                'fecha': current_date,
+                'descripcion': descripcion,
+                'monto': self._to_float_safe(monto),
+                'saldo': self._to_float_safe(saldo),
+            })
+
+        return transactions
+
+    @staticmethod
+    def _to_float_safe(value: Optional[str]):
+        """
+        Convierte strings de cantidad a float, robusto a formatos:
+          - '1,234.56'  -> 1234.56
+          - '1.234,56'  -> 1234.56
+          - '1234.56'   -> 1234.56
+          - '1234,56'   -> 1234.56
+        Ignora símbolos $, espacios y saltos de línea.
+        """
+        if value is None or not isinstance(value, str) or value.strip() == '':
+            return value
+        v = value.strip().replace(' ', '').replace('\n', '')
+        v = v.replace('$', '').replace('MXN', '').replace('-', '')
+        # Localiza el último separador como separador decimal
+        last_dot = v.rfind('.')
+        last_com = v.rfind(',')
+        dec_idx = max(last_dot, last_com)
+        if dec_idx == -1:
+            # No hay parte decimal clara; intenta float directo
+            try:
+                return float(v)
+            except ValueError:
+                return value
+        integer_part = v[:dec_idx]
+        decimal_part = v[dec_idx+1:]
+        # Elimina todos los separadores de miles de la parte entera
+        integer_part = integer_part.replace('.', '').replace(',', '')
+        normalized = f"{integer_part}.{decimal_part}"
+        try:
+            return float(normalized)
+        except ValueError:
+            return value
+
+    def _apply_sign_by_balance_delta(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Asigna signo a 'monto' comparando el delta de 'saldo' entre filas consecutivas.
+        Si saldo sube -> monto positivo; si baja -> monto negativo.
+        Mantiene el saldo de la primera fila como referencia.
+        """
+        saldo_prev = None
+        rows = []
+        for i, row in df.iterrows():
+            monto = row['monto']
+            saldo = row['saldo']
+            if i == 0:
+                # Sin delta; asumir 'monto' ya normalizado si existe
+                rows.append({'fecha': row['fecha'],
+                             'descripcion': row['descripcion'],
+                             'monto': monto,
+                             'saldo': saldo})
+                saldo_prev = saldo if isinstance(saldo, (int, float)) else saldo_prev
+                continue
+
+            if isinstance(saldo, (int, float)) and isinstance(saldo_prev, (int, float)) and isinstance(monto, (int, float)):
+                delta = saldo - saldo_prev
+                if delta < 0 and monto > 0:
+                    monto = -monto
+                elif delta > 0 and monto < 0:
+                    monto = -monto
+            rows.append({'fecha': row['fecha'],
+                         'descripcion': row['descripcion'],
+                         'monto': monto,
+                         'saldo': saldo})
+            saldo_prev = saldo if isinstance(saldo, (int, float)) else saldo_prev
+        
+        return pd.DataFrame(rows)

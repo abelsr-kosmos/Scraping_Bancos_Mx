@@ -7,7 +7,24 @@ def Scrap_Estado(ruta_archivo):
     tabla = analizar_estados(estado)
     tabla2 = analisis_movimientos(tabla)
     tabla2['Concepto'] = tabla2['Concepto'].apply(lambda x: x[:270] if isinstance(x, str) else x)
+    tabla2['Deposito'] = tabla2['Deposito'].apply(convert_to_float)
+    tabla2['Retiro'] = tabla2['Retiro'].apply(convert_to_float)
+    tabla2['Saldo'] = tabla2['Saldo'].apply(convert_to_float)
     return tabla2
+
+
+def convert_to_float(valor):
+    if isinstance(valor, str) and valor != "" and len(valor) > 1:
+        valor = valor.strip().replace(" ", "").replace("\n", "").replace("-", "")
+        new_valor = valor[::-1][:3]
+        for i, caracter in enumerate(valor[::-1][3:]):
+            new_valor += caracter.replace(',', "").replace('.', '')
+        try:
+            return float(new_valor[::-1])
+        except ValueError:
+            return valor
+    return valor
+            
 
 
 def analisis_movimientos(df):
@@ -47,7 +64,7 @@ def analisis_institucion_contraparte(df):
     df["InstitucionContraparte"] = ""
     for index,row in df.iterrows():
         if re.search("SPEI RECIBIDO",row["Concepto"]):
-            if re.search("BCO:\d{4}",row["Concepto"]):
+            if re.search(r"BCO:\d{4}",row["Concepto"]):
                 conceptos = row["Concepto"].split("BCO:")[1]
                 conceptos = conceptos[4:]
                 concepto = conceptos.split("HR")[0]
@@ -213,7 +230,7 @@ def incluir_movimientos(df):
     df["Movimiento"] = 0
     contador_movimiento = 0
     for index, fila in df.iterrows():
-        if  re.match("\d{2}-\w{3}-\d{2}", fila["Fecha"]):
+        if  re.match(r"\d{2}-\w{3}-\d{2}", fila["Fecha"]):
             contador_movimiento += 1 
         df.loc[index,"Movimiento"] = contador_movimiento
     return df

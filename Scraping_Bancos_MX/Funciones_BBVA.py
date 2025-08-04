@@ -448,7 +448,7 @@ class BBVAExtractor:
 
             movimientos.append({
                 "fecha":      fecha,
-                "descripcion": fragment,
+                "descripcion": fragment[:200],
                 "monto":      montos[0],
                 "saldo":      montos[2] if len(montos)>2 else None,
                 "geometry":   geoms

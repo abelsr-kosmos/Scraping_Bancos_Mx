@@ -6,6 +6,7 @@ def Scrap_Estado(ruta_archivo):
     estado = pdfplumber.open(ruta_archivo)
     tabla = analizar_estados(estado)
     tabla2 = analisis_movimientos(tabla)
+    tabla2['Concepto'] = tabla2['Concepto'].apply(lambda x: x[:270] if isinstance(x, str) else x)
     return tabla2
 
 

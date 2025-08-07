@@ -469,11 +469,11 @@ class BBVAExtractor:
                       else ( r['monto'] if r['x_pos']>0.68 else -r['monto'] ),
             axis=1
         )
-        df['cargo']      = df['monto'].apply(lambda v: abs(v) if v<0 else 0)
-        df['abono']      = df['monto'].apply(lambda v: v if v>0 else 0)
+        df['retiro']      = df['monto'].apply(lambda v: abs(v) if v<0 else 0)
+        df['deposito']      = df['monto'].apply(lambda v: v if v>0 else 0)
         df['confidence'] = df['x_pos'].notnull()
 
-        return df[['fecha','descripcion','cargo','abono','saldo','confidence']]
+        return df[['fecha','descripcion','retiro','deposito','saldo']]
 
     def extract(self) -> pd.DataFrame:
         """Método interno que corre todo el pipeline"""

@@ -445,10 +445,15 @@ class BBVAExtractor:
             ].tolist()
             # limpiamos para no volver a reutilizar
             self.flattened_ocr = self.flattened_ocr[~self.flattened_ocr['word'].isin(montos)]
+            
+            # Remove first occurrence of duplicated amount and saldo from the fragment text
+            for i in range(len(montos)):
+                fragment = re.sub(rf'\b{re.escape(montos[i])}\b', '', fragment, count=1)
+            fragment = re.sub(r'\n{2,}', '\n', fragment).strip()
 
             movimientos.append({
                 "fecha":      fecha,
-                "descripcion": fragment[:200],
+                "descripcion": fragment[14:200],
                 "monto":      montos[0],
                 "saldo":      montos[2] if len(montos)>2 else None,
                 "geometry":   geoms

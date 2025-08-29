@@ -269,7 +269,7 @@ class BanorteStatementParser:
     AMOUNT_PATTERN = r'(\d{1,3}(?:[.,]\d{3})*[.,]\d{2})'
 
     def __init__(self, text: str, date_pattern: Optional[str] = None):
-        self.text = text
+        self.text = text.replace("0CT", "OCT")  # Fix for OCT without dot
         self.date_pattern = date_pattern or self.DATE_PATTERN
         self._df: Optional[pd.DataFrame] = None
 

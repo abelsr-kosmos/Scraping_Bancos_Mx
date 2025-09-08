@@ -1,4 +1,5 @@
 import re
+import time
 from typing import Any, Dict, List
 
 import pdfplumber
@@ -8,6 +9,10 @@ def Scrap_Estado(ruta_archivo):
     estado = pdfplumber.open(ruta_archivo)
     tabla = analizar_estados(estado)
     tabla2 = analisis_movimientos(tabla)
+    tabla2 = tabla2[['Fecha', 'Concepto', 'Origen', 'Deposito', 'Retiro','Saldo']]
+    tabla2['descripcion'] = tabla2['Concepto'] + ' ' + tabla2['Origen']
+    tabla2 = tabla2.drop(['Concepto', 'Origen'], axis=1)
+    tabla2.columns = tabla2.columns.str.lower()
     return tabla2
 
 def obtener_coordenadas(pagina):
@@ -15,7 +20,17 @@ def obtener_coordenadas(pagina):
     #Iterar sobre cada caracter
     for caracter in pagina.chars:
         #agregamos a la lista únicamente los datos que nos interesan
-        caracteres.append({"Texto": caracter["text"], "top": caracter["top"], "bottom": caracter["bottom"], "left": caracter["x0"], "right": caracter["x1"],"height": caracter["height"], "width": caracter["width"]})
+        caracteres.append(
+            {
+                "Texto": caracter["text"], 
+                "top": caracter["top"], 
+                "bottom": caracter["bottom"], 
+                "left": caracter["x0"], 
+                "right": caracter["x1"],
+                "height": caracter["height"], 
+                "width": caracter["width"]
+            }
+        )
     #Convertimos la lista en un dataframe
     df = pd.DataFrame(caracteres)
     #Ordenamos el dataframe por top
@@ -42,61 +57,46 @@ def identificar_campos(coordenada):
 
 
 def identificar_numero_de_linea(df):
-    #Iterar los caracteres
-    df["linea"]  = 0
+    df = df.copy()  # Avoid modifying the original DataFrame
     df["tipo"] = df["right"].apply(identificar_campos)
-    linea = 0
-    for i in range(df.shape[0]):
-
-        posicion = df.iloc[i]["top"]
-        altura = df.iloc[i]["height"]
-        if i == 0:
-            altura_linea = posicion
-        
-        if posicion > altura_linea + altura:
-            altura_linea = posicion
-            linea = linea + 1
-        df.iloc[i,7] = linea
+    df['prev_top'] = df['top'].shift(1)
+    condition = df['top'] > (df['prev_top'] + df['height'])
+    df['linea'] = condition.cumsum().fillna(0).astype(int)
+    df.drop('prev_top', axis=1, inplace=True)
     return df
-
-    #Si la poisicion del siguiente caracter es mayor que la posición actual + la altura del caracter, es una nueva linea
 
 #Identifca que tipo de campo y concatena el texto para obtener la información correspondiente
 def scrap_fila(fila):
-    #meses = {"ENE":1,"FEB":2,"MAR":3,"ABR":4,"MAY":5,"JUN":6,"JUL":7,"AGO":8,"SEP":9,"OCT":10,"NOV":11,"DIC":12}
-    oper = ""
-    fecha = ""
-    descripcion = ""
-    cargo = ""
-    abono = ""
-    for i in range(fila.shape[0]):
-        if fila.iloc[i]["tipo"] == "Oper":
-            oper = oper + fila.iloc[i]["Texto"]
-        elif fila.iloc[i]["tipo"] == "Fecha":
-            fecha = fecha + fila.iloc[i]["Texto"]
-        elif fila.iloc[i]["tipo"] == "Descripcion":
-            descripcion = descripcion  + fila.iloc[i]["Texto"]
-        elif fila.iloc[i]["tipo"] == "Cargos":
-            cargo = cargo + fila.iloc[i]["Texto"]
-        elif fila.iloc[i]["tipo"] == "Abono":
-            abono = abono + fila.iloc[i]["Texto"]
-
+    # Group by 'tipo' and concatenate 'Texto' for each group
+    grouped = fila.groupby("tipo")["Texto"].apply(''.join)
+    
+    # Extract the concatenated strings, defaulting to empty string if key not present
+    oper = grouped.get("Oper", "")
+    fecha = grouped.get("Fecha", "")
+    descripcion = grouped.get("Descripcion", "")
+    cargo = grouped.get("Cargos", "")
+    abono = grouped.get("Abono", "")
     
     return {"Operacion": oper, "Fecha": fecha, "Descripcion": descripcion, "Cargo": cargo, "Abono": abono}
 
 def scrap_filas(df):
-    filas = []
-    for i in range(df["linea"].max()):
-        filas.append(scrap_fila(df[df["linea"] == i].sort_values(by=["left"])))
-    df = pd.DataFrame(filas)
-    return df
+    # Ensure "linea" is integer for proper grouping
+    df = df.copy()
+    df["linea"] = df["linea"].astype(int)
+    
+    # Use pandas groupby for vectorized operation: group by "linea", sort each group by "left", apply scrap_fila
+    filas = df.groupby("linea").apply(lambda group: scrap_fila(group.sort_values(by=["left"])))
+    
+    # Convert the resulting Series of dicts to a DataFrame
+    result_df = pd.DataFrame(list(filas))
+    return result_df
 
 
 def limpiar_primera_pagina(df):
     df = df.copy()
     primeras_filas = True
     for index,row in df.iterrows():
-        if re.search("\d{1,2}/\w{3}",row["Operacion"]) and primeras_filas:
+        if re.search(r"\d{1,2}/\w{3}",row["Operacion"]) and primeras_filas:
             df.drop(df.index[:index], inplace=True)
             primeras_filas = False
         if re.search("La GAT ",row["Operacion"]):
@@ -107,20 +107,6 @@ def limpiar_primera_pagina(df):
             df.drop(index, inplace=True)
         #if re.search("([0-2][0-9]|3[0-1])(\/|-)(0[1-9]|1[0-2])\2(\d{4})"):
             
-    return df
-
-def limpiar_paginas(df):
-    df = df.copy()
-
-    eliminar_celdas_vacias = True
-    for index,row in df.iterrows():
-        if re.search("\d{1,2}\/\w{3}",row["Operacion"]):
-            eliminar_celdas_vacias = False
-        if (row["Operacion"] == "" and eliminar_celdas_vacias):
-            df.drop(index, inplace=True)
-
-        if not re.search("\d{1,2}\/\w{3}",row["Operacion"]) and row["Operacion"] != "":
-            df.drop(index, inplace=True)
     return df
 
 
@@ -136,12 +122,11 @@ def limpiar_ultima_pagina(df):
     primeras_filas = True
     for index,row in df.iterrows():
         
-        if re.search("\d{1,2}/\w{3}",row["Operacion"]) and primeras_filas:
+        if re.search(r"\d{1,2}/\w{3}",row["Operacion"]) and primeras_filas:
             df.drop(df.index[:index ], inplace=True)
             primeras_filas = False
-        if re.search("Total de ",row["Operacion"]):
-            
-            ultimas_filas = True  
+        if re.search(r"Total de ",row["Operacion"]):
+            ultimas_filas = True
         if ultimas_filas:
             df.drop(index, inplace=True)
 
@@ -149,15 +134,14 @@ def limpiar_ultima_pagina(df):
 
 def limpiar_paginas(df):
     df = df.copy()
-
     eliminar_celdas_vacias = True
     for index,row in df.iterrows():
-        if re.search("\d{1,2}\/\w{3}",row["Operacion"]):
+        if re.search(r"\d{1,2}\/\w{3}",row["Operacion"]):
             eliminar_celdas_vacias = False
         if (row["Operacion"] == "" and eliminar_celdas_vacias):
             df.drop(index, inplace=True)
 
-        if not re.search("\d{1,2}\/\w{3}",row["Operacion"]) and row["Operacion"] != "":
+        if not re.search(r"\d{1,2}\/\w{3}",row["Operacion"]) and row["Operacion"] != "":
             df.drop(index, inplace=True)
     return df
 
@@ -167,15 +151,13 @@ def is_number(s):
         return True
     except ValueError:
         return False
+    
 def correccion_abono_cargo(df_movimientos):
     for index,fila in df_movimientos.iterrows(): #[+-]?([0-9]*[.])?[0-9]+
         abono_temp = fila["Abono"].replace(",","")
         abono_temp = abono_temp.replace(" ","")
         cargo_temp = fila["Cargo"].replace(",","")
         cargo_temp = cargo_temp.replace(" ","")
-        #a_num = is_number(abono_temp)
-        #c_num = is_number(cargo_temp)
-        #print(f"{abono_temp}= {a_num}|{cargo_temp} = {c_num}")
         if is_number(abono_temp) and is_number(cargo_temp):
                 fila["Abono"] = str(fila["Cargo"]) + str(fila["Abono"])
                 fila["Cargo"] = ""
@@ -197,7 +179,7 @@ def inicializar_movimientos(df_movimientos):
     numero_movimiento = 0
     for i in range(0,df_movimientos.shape[0]):
         operacion = df_movimientos.iloc[i,0]
-        if re.search("\d{1,2}\/\w{3}",operacion):
+        if re.search(r"\d{1,2}\/\w{3}",operacion):
             numero_movimiento += 1
         df_movimientos.iloc[i,5] = numero_movimiento
     return df_movimientos
@@ -214,8 +196,8 @@ def unificar_movimientos(df):
 
 def extraer_fecha_primera_pagina(pagina):
     texto = pagina.extract_text().replace("\n","").replace(" ","")
-    periodo = re.findall("PeriodoDEL\d{2}\/\d{2}\/\d{4}AL\d{2}\/\d{2}\/\d{4}",texto)[0]
-    anio = re.findall("\d{2}\/\d{2}\/\d{4}",periodo)[0].split("/")[-1]
+    periodo = re.findall(r"PeriodoDEL\d{2}\/\d{2}\/\d{4}AL\d{2}\/\d{2}\/\d{4}",texto)[0]
+    anio = re.findall(r"\d{2}\/\d{2}\/\d{4}",periodo)[0].split("/")[-1]
     return anio
 
 def incluir_anios(df_movimientos,anio_inicio):
@@ -228,21 +210,21 @@ def incluir_anios(df_movimientos,anio_inicio):
 def incluir_anio(df,anio_inicio,campo_fecha):
     meses = []
     for i in range(0,df.shape[0]):
-        operacion =re.findall("\d{1,2}\/\w{3}",df.iloc[i,campo_fecha])
+        operacion =re.findall(r"\d{1,2}\/\w{3}",df.iloc[i,campo_fecha])
         if operacion:
-            mes = re.findall("\w{3}",operacion[0])
+            mes = re.findall(r"\w{3}",operacion[0])
             meses.append(mes)
     try:
         if meses[0][0] == "DIC":
             for i in range(0,df.shape[0]):
-                operacion =re.findall("DIC",df.iloc[i,campo_fecha])
+                operacion =re.findall(r"DIC",df.iloc[i,campo_fecha])
                 if(operacion):
                     df.iloc[i,campo_fecha] += str(anio_inicio)
                 else:
                     df.iloc[i,campo_fecha] += str(int(anio_inicio)+1)
         else:
             for i in range(0,df.shape[0]):
-                df.iloc[i,campo_fecha] += str(int(anio_inicio))
+                df.iloc[i,campo_fecha] += "/" + str(int(anio_inicio))
     except:
         pass
     return df
@@ -251,43 +233,40 @@ def incluir_anio(df,anio_inicio,campo_fecha):
 def analizar_estados(documento):
     movimientos = False
     df_movimientos = pd.DataFrame()
-    fecha_estado_de_cuenta = ""
     anio_inicio = ""
-    for index,pagina in enumerate(documento.pages):
-        #Extraer texto de la página
-        texto = pagina.extract_text().replace("\n","").replace(" ","")
-        #Busca coincidencias en el texto para identificar el tipo de pagina y aplicar la función correspondiente a cada uno
-        if re.search("DetalledeMovimientosRealizados",texto) and re.search("OPERLIQ",texto):
+    for index, pagina in enumerate(documento.pages):
+        # Extraer texto de la página
+        texto = pagina.extract_text().replace("\n", "").replace(" ", "")
+        
+        # Busca coincidencias en el texto para identificar el tipo de pagina y aplicar la función correspondiente a cada uno
+        if re.search("DetalledeMovimientosRealizados", texto) and re.search("OPERLIQ", texto):
             movimientos = True
-            #Extraer Fecha o Periodo
+            # Extraer Fecha o Periodo
             df = operar_pagina(pagina)
             df = limpiar_primera_pagina(df)
             anio_inicio = extraer_fecha_primera_pagina(pagina)
-            df = incluir_anios(df,anio_inicio)
-            df_movimientos = pd.concat([df_movimientos,df], ignore_index=True)
-            
+            df = incluir_anios(df, anio_inicio)
+            df_movimientos = pd.concat([df_movimientos, df], ignore_index=True)
             continue
-        elif re.search("TotaldeMovimientos",texto) and re.search("TOTALMOVIMIENTOSCARGOS",texto):
+        
+        elif re.search("TotaldeMovimientos", texto) and re.search("TOTALMOVIMIENTOSCARGOS", texto):
             df = operar_pagina(pagina)
             df = limpiar_ultima_pagina(df)
-            df = incluir_anios(df,anio_inicio)
-            df_movimientos = pd.concat([df_movimientos,df], ignore_index=True)
+            df = incluir_anios(df, anio_inicio)
+            df_movimientos = pd.concat([df_movimientos, df], ignore_index=True)
             movimientos = False
             continue
-        if(movimientos):
+        
+        if movimientos:
             df = operar_pagina(pagina)
             df = limpiar_paginas(df)
-            df = incluir_anios(df,anio_inicio)
-            df_movimientos = pd.concat([df_movimientos,df], ignore_index=True)
-        print(f"{index+1} de {len(documento.pages)}", end="\r")
-
-
-    df_movimientos =correccion_abono_cargo(df_movimientos)
+            df = incluir_anios(df, anio_inicio)
+            df_movimientos = pd.concat([df_movimientos, df], ignore_index=True)
+        
+    df_movimientos = correccion_abono_cargo(df_movimientos)
     df_movimientos = inicializar_movimientos(df_movimientos)
-    df_movimientos =unificar_tabla(df_movimientos)
-
+    df_movimientos = unificar_tabla(df_movimientos)
     
-
     return df_movimientos
 
 
@@ -319,8 +298,8 @@ def analisis_concepto(df):
             contador_concepto = descripciones.count("|")
             if contador_concepto > 2:
                 descripcion = descripciones.split("|")[2]
-                if re.search("\d{7}",descripcion):
-                    descripcion = descripcion.replace(re.search("\d{7}",descripcion).group(),"")
+                if re.search(r"\d{7}",descripcion):
+                    descripcion = descripcion.replace(re.search(r"\d{7}",descripcion).group(),"")
         df.loc[index,"ConceptoMovimiento"] = descripcion
 
     return df
@@ -362,9 +341,9 @@ def analisis_contraparte(df):
         elif re.search("COMPRA",tipo):
             contraparte = concepto.split("|")[1]
         elif re.search("PAGO",concepto) and re.search("TERCERO",concepto):
-            if re.search("\w{4} \d{10}",concepto):
-                contraparte = re.search("\w{4} \d{10}",concepto).group()
-            
+            if re.search(r"\w{4} \d{10}",concepto):
+                contraparte = re.search(r"\w{4} \d{10}",concepto).group()
+
         df.loc[index,"Contraparte"] = contraparte
     return df
 

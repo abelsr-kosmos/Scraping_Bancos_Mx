@@ -10,7 +10,6 @@ def Scrap_Estado(ruta_archivo):
     tabla = analizar_estados(estado)
     tabla2 = analisis_movimientos(tabla)
     tabla2.columns = [col.lower() for col in tabla2.columns]
-    print(tabla2.columns)
     tabla2['descripcion'] = tabla2['concepto'] + " | " + tabla2['origen'] + " | " + tabla2['conceptomovimiento']
     tabla2['descripcion'] = (
         tabla2['descripcion']

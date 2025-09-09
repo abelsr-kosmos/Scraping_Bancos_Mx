@@ -14,7 +14,7 @@ def Scrap_Estado(ruta_archivo):
     tabla2.columns = tabla2.columns.str.lower()
     tabla2['concepto'] = tabla2['concepto'] + tabla2['origen']
     tabla2 = tabla2[["fecha", "concepto", "deposito", "retiro", "saldo"]]
-    tabla2 = tabla2.rename(columns={"descripcion": "concepto"})
+    tabla2 = tabla2.rename(columns={"concepto": "descripcion"})
     try:
         tabla2['deposito'] = pd.to_numeric(tabla2['deposito'], errors='coerce')
     except:

@@ -25,6 +25,7 @@ def Scrap_Estado(ruta_archivo):
         tabla2['saldo'] = pd.to_numeric(tabla2['saldo'].str.replace(",",""), errors='coerce')
     except:
         print("Error al convertir saldo a numérico")
+    tabla2 = tabla2[['fecha', 'descripcion', 'deposito', 'retiro','saldo']]
     return tabla2
 
 def obtener_coordenadas(pagina):

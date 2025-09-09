@@ -11,83 +11,149 @@ def Scrap_Estado(ruta_archivo):
     estado = pdfplumber.open(ruta_archivo)
     tabla = analizar_estados(estado)
     tabla2 = analisis_movimientos(tabla)
+    tabla2.columns = tabla2.columns.str.lower()
+    tabla2['concepto'] = tabla2['concepto'] + tabla2['origen']
+    tabla2 = tabla2[["fecha", "concepto", "deposito", "retiro", "saldo"]]
+    tabla2 = tabla2.rename(columns={"descripcion": "concepto"})
+    try:
+        tabla2['deposito'] = pd.to_numeric(tabla2['deposito'], errors='coerce')
+    except:
+        print("Error al convertir deposito a numérico")
+    try:
+        tabla2['retiro'] = pd.to_numeric(tabla2['retiro'], errors='coerce')
+    except:
+        print("Error al convertir retiro a numérico")
+    try:
+        tabla2['saldo'] = pd.to_numeric(tabla2['saldo'], errors='coerce')
+    except:
+        print("Error al convertir saldo a numérico")
     return tabla2
 
-def agrupar_columnas(caracteres):
-    columnas = []
-    for caracter in caracteres:
-        coordenada = (caracter["x1"])
-        if coordenada <= 91 and coordenada >= 47:
-            columnas.append({"Caracter": caracter["text"], "Top": caracter["top"],"X":caracter["x1"],"Columna": 0})
-        elif coordenada <= 252  and coordenada > 91:
-            columnas.append({"Caracter": caracter["text"], "Top": caracter["top"],"X":caracter["x1"],"Columna": 1})
-        elif coordenada <= 378  and coordenada > 252:
-            columnas.append({"Caracter": caracter["text"], "Top": caracter["top"],"X":caracter["x1"],"Columna": 2})
-        elif coordenada <= 440  and coordenada > 378:
-            columnas.append({"Caracter": caracter["text"], "Top": caracter["top"],"X":caracter["x1"],"Columna": 3})
-        elif coordenada <= 513  and coordenada > 440:
-            columnas.append({"Caracter": caracter["text"], "Top": caracter["top"],"X":caracter["x1"],"Columna": 4})
-        elif coordenada <= 587  and coordenada > 513:
-            columnas.append({"Caracter": caracter["text"], "Top": caracter["top"],"X":caracter["x1"],"Columna": 5})
-    columnas = pd.DataFrame(columnas)
-    return columnas
+def agrupar_columnas(caracteres) -> pd.DataFrame:
+    """
+    Asigna cada caracter a una columna según rangos de x1.
+    Optimizada: evita cadena de if/elif y valida rangos una sola vez.
+    Rangos (inclusive/exclusive replicando lógica original):
+      Col 0: 47 <= x <= 91
+      Col 1: 91 < x <= 252
+      Col 2: 252 < x <= 378
+      Col 3: 378 < x <= 440
+      Col 4: 440 < x <= 513
+      Col 5: 513 < x <= 587
+    """
+    if not caracteres:
+        return pd.DataFrame(columns=["Caracter", "Top", "X", "Columna"])
 
-def unificar_columna(top):
-    top = top.sort_values(by=["X"])
-    fecha = ""
-    concepto = ""
-    origen = ""
-    deposito = ""
-    retiro = ""
-    saldo = ""
-    for index, row in top.iterrows():
-        if row["Columna"] == 0:
-            fecha = fecha + row["Caracter"]
-        elif row["Columna"] == 1:
-            concepto = concepto + row["Caracter"]
-        elif row["Columna"] == 2:
-            origen = origen + row["Caracter"]
-        elif row["Columna"] == 3:
-            deposito = deposito + row["Caracter"]
-        elif row["Columna"] == 4:
-            retiro = retiro + row["Caracter"]
-        elif row["Columna"] == 5:
-            saldo = saldo + row["Caracter"]
-    fila = {"Fecha": fecha, "Concepto": concepto, "Origen": origen, "Deposito": deposito, "Retiro": retiro, "Saldo": saldo, "Top": top["Top"].max()}
+    # Límites de corte
+    edges = [47, 91, 252, 378, 440, 513, 587]  # 6 intervalos => 7 edges
+    rows = []
+    for ch in caracteres:
+        x = ch.get("x1")
+        if x is None or x < edges[0] or x > edges[-1]:
+            continue
+        # Buscar intervalo (son pocos, loop es suficiente)
+        for col in range(len(edges) - 1):
+            lo, hi = edges[col], edges[col + 1]
+            if (col == 0 and lo <= x <= hi) or (col > 0 and lo < x <= hi):
+                rows.append({
+                    "Caracter": ch.get("text", ""),
+                    "Top": ch.get("top"),
+                    "X": x,
+                    "Columna": col
+                })
+                break
+
+    return pd.DataFrame(rows, columns=["Caracter", "Top", "X", "Columna"])
+
+def unificar_columna(top: pd.DataFrame) -> dict:
+    """
+    Versión optimizada: evita múltiples if/elif por fila.
+    top: subconjunto de 'columnas' con un solo valor de Top.
+    """
+    if top.empty:
+        return {"Fecha": "", "Concepto": "", "Origen": "", "Deposito": "", "Retiro": "", "Saldo": "", "Top": None}
+
+    # Orden correcto de caracteres dentro de la línea
+    top_sorted = top.sort_values("X")
+
+    # Agrupa por índice de columna y concatena caracteres
+    agregados = top_sorted.groupby("Columna")["Caracter"].agg("".join).to_dict()
+
+    # Mapea índice -> nombre
+    col_map = {
+        0: "Fecha",
+        1: "Concepto",
+        2: "Origen",
+        3: "Deposito",
+        4: "Retiro",
+        5: "Saldo",
+    }
+
+    fila = {nombre: agregados.get(idx, "") for idx, nombre in col_map.items()}
+    fila["Top"] = top_sorted["Top"].iat[0]
     return fila
 
-#Aqui se podria implementar el agregar la columna movimiento para saber diferencias y agrupar conocimientos
 
-def unificar_columnas(columnas):
-    tops = columnas["Top"].unique()
-    filas = []
-    for top in tops:
-        top = columnas[columnas["Top"] == top]
-        fila = unificar_columna(top)
-        filas.append(fila)
-    filas = pd.DataFrame(filas)
-    
-    filas = filas.sort_values(by=["Top"])
-    return filas
+def unificar_columnas(columnas: pd.DataFrame) -> pd.DataFrame:
+    """
+    Vectoriza la transformación:
+    - Ordena una sola vez
+    - Agrupa por (Top, Columna) y concatena
+    - Desenrolla a formato ancho
+    Mucho más eficiente que iterar Top por Top.
+    """
+    if columnas.empty:
+        return pd.DataFrame(columns=["Fecha", "Concepto", "Origen", "Deposito", "Retiro", "Saldo", "Top"])
+
+    # Asegura orden interno correcto
+    columnas = columnas.sort_values(["Top", "X"])
+
+    # Concatena caracteres por Top/Columna
+    agrupado = (
+        columnas
+        .groupby(["Top", "Columna"])["Caracter"]
+        .agg("".join)
+        .unstack(fill_value="")
+    )
+    # Mapea columnas numéricas a nombres
+    col_map = {
+        0: "Fecha",
+        1: "Concepto",
+        2: "Origen",
+        3: "Deposito",
+        4: "Retiro",
+        5: "Saldo",
+    }
+    agrupado = agrupado.rename(columns=col_map)
+
+    # Asegura todas las columnas (si faltó alguna)
+    for nombre in col_map.values():
+        if nombre not in agrupado.columns:
+            agrupado[nombre] = ""
+
+    # Restaura Top como columna
+    agrupado = agrupado.reset_index()
+
+    # Orden de columnas final consistente con versiones previas
+    columnas_orden = ["Fecha", "Concepto", "Origen", "Deposito", "Retiro", "Saldo", "Top"]
+    agrupado = agrupado[columnas_orden]
+    # Ordena por Top (ya debería estar ordenado)
+    return agrupado.sort_values("Top").reset_index(drop=True)
 
 
 def analizar_estados(estado):
     df = pd.DataFrame()
     anios = []
-    for pagina in estado.pages:
-        texto = pagina.extract_text()
-        texto = texto.replace("\n", "")
-        texto = texto.replace(" ", "")
-        if re.search("FechaConceptoOrigen", texto):
+    texto = [pagina.extract_text().replace("\n", "").replace(" ", "") for pagina in estado.pages]
+    for i, pagina in enumerate(estado.pages):
+        if re.search("FechaConceptoOrigen", texto[i]):
             movimientos = extraer_movimientos_pagina(pagina)
             df = pd.concat([df, pd.DataFrame(movimientos)])
-        elif re.search("Periodo", texto):
-            periodo = texto.split("Periodo")[1]
+        elif re.search("Periodo", texto[i]):
+            periodo = texto[i].split("Periodo")[1]
             periodo = periodo.split("C.P")[0]
             anio = periodo.split("/")[0]
             anios.append(f"20{anio.split('-')[-1]}")
-            
-
 
     df = incluir_movimientos(df)
     df = unificar_tabla(df)
@@ -179,17 +245,24 @@ def extraer_movimientos_pagina(pagina):
     return filas
 
 def arreglar_tabla(df):
-    df = df.drop('Top', axis=1)
-    for index, row in  df.iterrows():
-        if row["Deposito"] is not None:
-            df.loc[index,"Deposito"] = df.loc[index,"Deposito"].replace("$", "")
-            df.loc[index,"Deposito"] = df.loc[index,"Deposito"].replace(",", "")
-        if row["Retiro"] is not None:
-            df.loc[index,"Retiro"] = df.loc[index,"Retiro"].replace("$", "")
-            df.loc[index,"Retiro"] = df.loc[index,"Retiro"].replace(",", "")
-        if row["Saldo"] is not None:
-            df.loc[index,"Saldo"] = df.loc[index,"Saldo"].replace("$", "")
-            df.loc[index,"Saldo"] = df.loc[index,"Saldo"].replace(",", "")
+    """
+    Limpia columnas monetarias eliminando '$' y ',' de forma vectorizada.
+    - Elimina columna 'Top' si existe.
+    - Convierte Deposito, Retiro y Saldo a float (NaN si vacío/no convertible).
+    """
+    df = df.drop(columns=['Top'], errors='ignore').copy()
+    monetarias = [c for c in ['Deposito', 'Retiro', 'Saldo'] if c in df.columns]
+    if not monetarias:
+        return df
+
+    # Elimina símbolos y convierte a numérico
+    df[monetarias] = (
+        df[monetarias]
+        .replace(r'[\$,]', '', regex=True)
+        .replace({'': None, 'None': None})
+    )
+    for c in monetarias:
+        df[c] = pd.to_numeric(df[c], errors='coerce')
 
     return df
 
@@ -208,28 +281,88 @@ def unificar_tabla(df):
     return pd.DataFrame(movimientos_unificados)
 
 
-def incluir_movimientos(filas):
-    filas = filas.reset_index(drop=True)
-    filas["Movimiento"] = 0
-    contador_movimiento = 0
-    for index, fila in filas.iterrows():
-        if  re.match("\d{2} \w{3}", fila["Fecha"]):
-            contador_movimiento += 1 
-        filas.loc[index,"Movimiento"] = contador_movimiento
-        
+def incluir_movimientos(filas: pd.DataFrame) -> pd.DataFrame:
+    """
+    Asigna un ID de Movimiento agrupando líneas que pertenecen a la misma transacción.
+    Reglas:
+      - Una nueva transacción inicia cuando aparece una fecha (regex dd MMM).
+      - Las líneas siguientes sin fecha se consideran continuación (concepto/origen extendido).
+      - Si la línea con fecha no trae (Deposito/Retiro/Saldo) se buscan en la(s) siguiente(s)
+        línea(s) del mismo movimiento y se copian al renglón con fecha.
+    No elimina los valores de las líneas fusionadas; solo asegura que la primera (con fecha)
+    tenga los importes para que unificar_movimiento funcione correctamente.
+    """
+    if filas is None or filas.empty:
+        return filas
+
+    filas = filas.reset_index(drop=True).copy()
+    for col in ["Deposito", "Retiro", "Saldo"]:
+        if col not in filas.columns:
+            filas[col] = ""
+
+    date_re = re.compile(r"^\d{2}\s*[A-ZÁÉÍÓÚÑ]{3}$", re.IGNORECASE)
+
+    def _str(x):
+        return "" if pd.isna(x) else str(x)
+
+    def has_amount(row) -> bool:
+        return any(_str(row[c]).strip() != "" for c in ["Deposito", "Retiro", "Saldo"])
+
+    # 1) Asignar IDs de movimiento
+    movimiento_id = 0
+    mov_ids = []
+    for _, row in filas.iterrows():
+        fecha_txt = _str(row.get("Fecha", "")).strip()
+        if date_re.match(fecha_txt):
+            movimiento_id += 1
+        mov_ids.append(movimiento_id)
+    filas["Movimiento"] = mov_ids
+
+    if movimiento_id == 0:
+        return filas  # No se detectaron fechas
+
+    # 2) Completar importes faltantes en la fila con fecha
+    for mov in sorted(filas["Movimiento"].unique()):
+        if mov == 0:
+            continue
+        grupo_idx = filas.index[filas["Movimiento"] == mov]
+        if len(grupo_idx) == 0:
+            continue
+
+        # Buscar la primera fila con fecha dentro del grupo
+        first_date_idx = None
+        for idx in grupo_idx:
+            if date_re.match(_str(filas.at[idx, "Fecha"]).strip()):
+                first_date_idx = idx
+                break
+        if first_date_idx is None:
+            continue
+
+        # Si ya tiene importes no hacemos nada
+        if has_amount(filas.loc[first_date_idx]):
+            continue
+
+        # Buscar hacia adelante dentro del grupo alguna fila con importes
+        for idx in grupo_idx:
+            if idx == first_date_idx:
+                continue
+            if has_amount(filas.loc[idx]):
+                # Copiar importes faltantes
+                for col in ["Deposito", "Retiro", "Saldo"]:
+                    if _str(filas.at[first_date_idx, col]).strip() == "" and _str(filas.at[idx, col]).strip() != "":
+                        filas.at[first_date_idx, col] = filas.at[idx, col]
+                break  # Solo primera coincidencia
+
     return filas
 
 def eliminar_movimientos_no_deseados(filas):
     filas = filas.reset_index(drop=True)
     for index,row in filas.iterrows():
         if index > 0:
-            if row["Fecha"] == "Fecha":
+            if row["Fecha"].strip() == "Fecha":
                 filas = filas[filas["Top"] > row["Top"]]
-            elif  re.search("LAS\s*TAS" ,row["Fecha"]):
+            elif re.search(r"LAS\s*TAS" ,row["Fecha"]):
                 filas = filas[filas["Top"] < row["Top"]]
-            elif row["Deposito"] != "" and row["Retiro"] != "":
-                filas = filas[filas["Top"] < row["Top"]]
-
     return filas
 
 ## Implementación usando docTR como OCR backend ##

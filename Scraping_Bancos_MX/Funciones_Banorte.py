@@ -3,29 +3,38 @@ from typing import List, Tuple, Optional
 
 import pdfplumber
 import pandas as pd
+import time
 
 def Scrap_Estado(ruta_archivo):
     estado = pdfplumber.open(ruta_archivo)
     tabla = analizar_estados(estado)
     tabla2 = analisis_movimientos(tabla)
-    tabla2['Concepto'] = tabla2['Concepto'].apply(lambda x: x[:270] if isinstance(x, str) else x)
-    tabla2['Deposito'] = tabla2['Deposito'].apply(convert_to_float)
-    tabla2['Retiro'] = tabla2['Retiro'].apply(convert_to_float)
-    tabla2['Saldo'] = tabla2['Saldo'].apply(convert_to_float)
+    tabla2.columns = [col.lower() for col in tabla2.columns]
+    print(tabla2.columns)
+    tabla2['descripcion'] = tabla2['concepto'] + " | " + tabla2['origen'] + " | " + tabla2['conceptomovimiento']
+    tabla2['descripcion'] = (
+        tabla2['descripcion']
+        .astype(str)
+        .str.replace(r'[\t\r\n]+', ' ', regex=True)
+        .str.replace(r'\s+', ' ', regex=True)
+        .str.strip(' |')      # quita espacios y pipes extremos
+        .str.slice(0, 256)    # limita a 256 caracteres
+    )
+    tabla2 = tabla2[['fecha', 'descripcion', 'deposito', 'retiro', 'saldo']]
+    try:
+        tabla2['deposito'] = pd.to_numeric(tabla2['deposito'].str.replace(',', '').str.replace('$', ''), errors='coerce')
+    except Exception as e:
+        print(f"Error al convertir depósito: {e}")
+    try:
+        tabla2['retiro'] = pd.to_numeric(tabla2['retiro'].str.replace(',', '').str.replace('$', ''), errors='coerce')
+    except Exception as e:
+        print(f"Error al convertir retiro: {e}")
+    try:
+        tabla2['saldo'] = pd.to_numeric(tabla2['saldo'].str.replace(',', '').str.replace('$', ''), errors='coerce')
+    except Exception as e:
+        print(f"Error al convertir saldo: {e}")
     return tabla2
 
-
-def convert_to_float(valor):
-    if isinstance(valor, str) and valor != "" and len(valor) > 1:
-        valor = valor.strip().replace(" ", "").replace("\n", "").replace("-", "")
-        new_valor = valor[::-1][:3]
-        for i, caracter in enumerate(valor[::-1][3:]):
-            new_valor += caracter.replace(',', "").replace('.', '')
-        try:
-            return float(new_valor[::-1])
-        except ValueError:
-            return valor
-    return valor
             
 
 
@@ -52,8 +61,6 @@ def analisis_concepto(df):
             conceptos = row["Concepto"].split("CONCEPTO:")[1]
             concepto = conceptos.split("REFERENCIA")[0]
         elif re.search("PAGO SPEI",row["Concepto"]) and not re.search("COMISION",row["Concepto"]) and not re.search("I.V.A",row["Concepto"]):
-            # conceptos = row["Concepto"].split("INST),")[1]
-            # concepto = conceptos.split("CVE")[0]
             concepto = ''.join([i for i in row["Concepto"] if not i.isdigit()])
         try:
             concepto = concepto.replace("|","")
@@ -72,8 +79,6 @@ def analisis_institucion_contraparte(df):
                 concepto = conceptos.split("HR")[0]
                 df.loc[index,"InstitucionContraparte"] = concepto
         elif re.search("PAGO SPEI",row["Concepto"]) and not re.search("COMISION",row["Concepto"]) and not re.search("I.V.A",row["Concepto"]):
-                # conceptos = row["Concepto"].split("IVA:")[1]
-                # concepto = conceptos.split("HORA")[0]
                 concepto = ''.join([i for i in row["Concepto"] if not i.isdigit()])
                 try:
                     concepto = concepto.replace("|","")
@@ -131,15 +136,12 @@ def analisis_tipo_movimiento(df):
 
 def analizar_estados(estado):
     df = pd.DataFrame()
-    anios = []
-    contador = 0
-    for pagina in estado.pages:
-        texto = pagina.extract_text()
-        texto = texto.replace("\n", "")
-        texto = texto.replace(" ", "")
-        if re.search("FECHADESCRIPCIÓN/ESTABLECIMIENTO", texto) :
-                movimientos = extraer_movimientos_pagina(pagina,texto)
-                df = pd.concat([df, pd.DataFrame(movimientos)])
+    texto_paginas = [pagina.extract_text().replace("\n", "").replace(" ", "")  for pagina in estado.pages]
+    for i, pagina in enumerate(estado.pages, 1):
+        texto = texto_paginas[i-1]
+        if re.search("FECHADESCRIPCIÓN/ESTABLECIMIENTO", texto):
+            movimientos = extraer_movimientos_pagina(pagina,texto)
+            df = pd.concat([df, pd.DataFrame(movimientos)])
     df = df.reset_index(drop=True)
     df = incluir_movimientos(df)
     df = unificar_tabla(df)
@@ -173,38 +175,38 @@ def agrupar_columnas(caracteres):
     columnas = pd.DataFrame(columnas)
     return columnas
 
-def unificar_columna(top):
-    top = top.sort_values(by=["X"])
-    fecha = ""
-    concepto = ""
-    deposito = ""
-    retiro = ""
-    saldo = ""
-    for index, row in top.iterrows():
-        if row["Columna"] == 0:
-            fecha = fecha + row["Caracter"]
-        elif row["Columna"] == 1:
-            concepto = concepto + row["Caracter"]
-        elif row["Columna"] == 2:
-            deposito = deposito + row["Caracter"]
-        elif row["Columna"] == 3:
-            retiro = retiro + row["Caracter"]
-        elif row["Columna"] == 4:
-            saldo = saldo + row["Caracter"]
-    fila = {"Fecha": fecha, "Concepto": concepto, "Origen": "", "Deposito": deposito, "Retiro": retiro, "Saldo": saldo, "Top": top["Top"].max()}
-    return fila
-
 def unificar_columnas(columnas):
-    tops = columnas["Top"].unique()
-    filas = []
-    for top in tops:
-        top = columnas[columnas["Top"] == top]
-        fila = unificar_columna(top)
-        filas.append(fila)
-    filas = pd.DataFrame(filas)
-    
-    filas = filas.sort_values(by=["Top"])
-    return filas
+    if columnas.empty:
+        return pd.DataFrame(columns=["Fecha","Concepto","Origen","Deposito","Retiro","Saldo","Top"])
+
+    columnas = columnas.sort_values(["Top", "Columna", "X"], kind="mergesort")
+
+    wide = (columnas
+            .groupby(["Top", "Columna"], sort=False)["Caracter"]
+            .agg(''.join)
+            .unstack("Columna", fill_value=''))
+
+    for c in range(5):
+        if c not in wide.columns:
+            wide[c] = ""
+
+    wide = wide.rename(columns={
+        0: "Fecha",
+        1: "Concepto",
+        2: "Deposito",
+        3: "Retiro",
+        4: "Saldo"
+    })
+
+    wide["Origen"] = ""  # Columna vacía (placeholder)
+
+    # Orden y salida final
+    result = (wide
+              .reset_index()
+              .loc[:, ["Fecha","Concepto","Origen","Deposito","Retiro","Saldo","Top"]]
+              .sort_values("Top")
+              .reset_index(drop=True))
+    return result
 
 def eliminar_movimientos_no_deseados(filas):
     filas = filas.reset_index(drop=True)
@@ -221,9 +223,6 @@ def eliminar_movimientos_no_deseados(filas):
         if index >0:
             if re.search("SALDO ANTERIOR",row["Concepto"] ):
                     filas = filas.drop(index)
-            #elif  not re.match("\d{2}-\w{3}-\d{2}", row["Fecha"]):
-            #    filas = filas.drop(index)
-
     return filas
 
 

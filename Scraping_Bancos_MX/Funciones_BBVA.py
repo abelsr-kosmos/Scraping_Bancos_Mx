@@ -14,15 +14,15 @@ def Scrap_Estado(ruta_archivo):
     tabla2 = tabla2.drop(['Concepto', 'Origen'], axis=1)
     tabla2.columns = tabla2.columns.str.lower()
     try:
-        tabla2['deposito'] = pd.to_numeric(tabla2['deposito'], errors='coerce').fillna(0)
+        tabla2['deposito'] = pd.to_numeric(tabla2['deposito'].str.replace(",",""), errors='coerce')
     except:
         print("Error al convertir deposito a numérico")
     try:
-        tabla2['retiro'] = pd.to_numeric(tabla2['retiro'], errors='coerce').fillna(0)
+        tabla2['retiro'] = pd.to_numeric(tabla2['retiro'].str.replace(",",""), errors='coerce')
     except:
         print("Error al convertir retiro a numérico")
     try:
-        tabla2['saldo'] = pd.to_numeric(tabla2['saldo'], errors='coerce').fillna(0)
+        tabla2['saldo'] = pd.to_numeric(tabla2['saldo'].str.replace(",",""), errors='coerce')
     except:
         print("Error al convertir saldo a numérico")
     return tabla2

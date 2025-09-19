@@ -4,6 +4,9 @@ import pandas as pd
 
 def Scrap_Estado(ruta_archivo):
     df = procesar_pdf(ruta_archivo)
+    df.columns = [col.lower() for col in df.columns]
+    df = df.dropna(subset=['retiro', 'deposito'], how='all')
+    df = df.dropna(subset=['saldo'], how='all')
     return df
 
 def es_linea_movimiento(linea):

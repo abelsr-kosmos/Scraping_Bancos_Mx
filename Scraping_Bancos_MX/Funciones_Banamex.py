@@ -326,12 +326,12 @@ class TransactionsParser:
             saldo_val = row['saldo']
 
         # Separar retiros y depósitos
-        df['retiros'] = df['monto'].apply(lambda x: abs(x) if x < 0 else None)
-        df['depositos'] = df['monto'].apply(lambda x: abs(x) if x > 0 else None)
+        df['retiro'] = df['monto'].apply(lambda x: abs(x) if x < 0 else None)
+        df['deposito'] = df['monto'].apply(lambda x: abs(x) if x > 0 else None)
         df = df.drop(columns=['monto'])
 
         # Orden final de columnas
-        df = df[['fecha', 'description', 'retiros', 'depositos', 'saldo']]
+        df = df[['fecha', 'description', 'retiro', 'deposito', 'saldo']]
         return df
 
     # ---------- Paso 5 ----------

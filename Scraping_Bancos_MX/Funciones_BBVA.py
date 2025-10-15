@@ -389,7 +389,7 @@ class BBVAExtractor:
         'JUL','AGO','SEP','OCT','NOV','DIC'
     ]
     months_pattern: str = '|'.join(months)
-    double_date_pattern: str = rf"\b\d{{2}}/({months_pattern})\b\s+\d{{2}}/({months_pattern})\b"
+    double_date_pattern: str = rf"\b\d{{2}}[/I]?({months_pattern})\b\s+\d{{2}}[/I]?({months_pattern})\b"
     money_regex: str = r'\b\d{1,3}(?:,\d{3})*\.\d{2}\b'
 
     def __init__(self, text: str, ocr: dict):
@@ -432,17 +432,23 @@ class BBVAExtractor:
             montos = re.findall(self.money_regex, fragment)
             # 📐 Geometrías
             geoms = self.flattened_ocr.loc[
-                self.flattened_ocr['word'].isin(montos),
-                'geometry'
-            ].tolist()
+                self.flattened_ocr['word'].str.contains(montos[0], flags=re.IGNORECASE, regex=True)
+            ]['geometry'].tolist()
             # limpiamos para no volver a reutilizar
-            self.flattened_ocr = self.flattened_ocr[~self.flattened_ocr['word'].isin(montos)]
-            
+            if len(geoms) != 0:
+                geoms = geoms[0]
+                index = self.flattened_ocr.index[self.flattened_ocr['word'] == montos[0]][0]
+                self.flattened_ocr = self.flattened_ocr.drop(index)
+
+            bbva_index = fragment.find('BBVA MEXICO')
+            if bbva_index != -1:
+                fragment = fragment[:bbva_index].strip()
+                
             # Remove first occurrence of duplicated amount and saldo from the fragment text
             for i in range(len(montos)):
                 fragment = re.sub(rf'\b{re.escape(montos[i])}\b', '', fragment, count=1)
-            fragment = re.sub(r'\n{2,}', '\n', fragment).strip()
-
+            fragment = re.sub(r'\n{2,}', '\n', fragment).strip()  
+                          
             movimientos.append({
                 "fecha":      fecha,
                 "descripcion": fragment[14:200],
@@ -456,8 +462,8 @@ class BBVAExtractor:
         df['monto'] = df['monto'].str.replace(',','').astype(float)
         if df['saldo'].notnull().any():
             df['saldo'] = df['saldo'].str.replace(',','').astype(float)
-        df['x0_pos'] = df['geometry'].apply(lambda g: g[0][0] if g else None)
-        df['x1_pos'] = df['geometry'].apply(lambda g: g[0][2] if g else None)
+        df['x0_pos'] = df['geometry'].apply(lambda g: g[0] if g else None)
+        df['x1_pos'] = df['geometry'].apply(lambda g: g[2] if g else None)
         df['x_pos']  = (df['x0_pos'] + df['x1_pos'])/2
 
         # Determinar signo según posición

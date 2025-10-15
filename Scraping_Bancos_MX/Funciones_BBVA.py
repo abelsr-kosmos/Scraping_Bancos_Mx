@@ -400,13 +400,20 @@ class BBVAExtractor:
     def _flatten_ocr(self) -> None:
         """Aplana el OCR en un DataFrame ['word','geometry']"""
         words: List[tuple] = []
-        for page in self.ocr:
+        for page_index, page in enumerate(self.ocr, 1):
             for item in page['items']:
                 for block in item['blocks']:
                     for line in block['lines']:
                         for word in line['words']:
-                            words.append((word['value'], word['geometry']))
-        self.flattened_ocr = pd.DataFrame(words, columns=['word','geometry'])
+                            words.append((word['value'], word['geometry'], page_index))
+        self.flattened_ocr = pd.DataFrame(words, columns=['word','geometry','page'])
+        self.flattened_ocr['x0'] = self.flattened_ocr['geometry'].apply(lambda g: g[0])
+        self.flattened_ocr['y0'] = self.flattened_ocr['geometry'].apply(lambda g: g[1])
+        self.flattened_ocr['x1'] = self.flattened_ocr['geometry'].apply(lambda g: g[2])
+        self.flattened_ocr['y1'] = self.flattened_ocr['geometry'].apply(lambda g: g[3])
+        self.flattened_ocr.sort_values(by=['page','y0','x0'], inplace=True)
+        self.flattened_ocr = self.flattened_ocr[~((self.flattened_ocr['page']==1) & (self.flattened_ocr['y0']<0.65))]
+        self.flattened_ocr.reset_index(drop=True, inplace=True)
 
     def _split_text(self) -> List[str]:
         """Divide el texto en fragmentos que empiezan con un par de fechas"""

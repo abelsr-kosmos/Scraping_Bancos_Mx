@@ -319,7 +319,7 @@ class TransactionsParser:
         for idx, row in df.iterrows():
             if row['monto'] is None:
                 continue
-            if row['saldo'] > saldo_val:
+            if row['saldo'] >= saldo_val:
                 df.at[idx, 'monto'] = row['monto']    # Depósito
             else:
                 df.at[idx, 'monto'] = -row['monto']   # Retiro

@@ -21,15 +21,15 @@ def Scrap_Estado(ruta_archivo):
     )
     tabla2 = tabla2[['fecha', 'descripcion', 'deposito', 'retiro', 'saldo']]
     try:
-        tabla2['deposito'] = pd.to_numeric(tabla2['deposito'].str.replace(',', '').str.replace('$', ''), errors='coerce')
+        tabla2['deposito'] = pd.to_numeric(tabla2['deposito'].str.replace(r'[^0-9.,]', '', regex=True).str.replace(',', ''), errors='coerce')
     except Exception as e:
         print(f"Error al convertir depósito: {e}")
     try:
-        tabla2['retiro'] = pd.to_numeric(tabla2['retiro'].str.replace(',', '').str.replace('$', ''), errors='coerce')
+        tabla2['retiro'] = pd.to_numeric(tabla2['retiro'].str.replace(r'[^0-9.,]', '', regex=True).str.replace(',', ''), errors='coerce')
     except Exception as e:
         print(f"Error al convertir retiro: {e}")
     try:
-        tabla2['saldo'] = pd.to_numeric(tabla2['saldo'].str.replace(',', '').str.replace('$', ''), errors='coerce')
+        tabla2['saldo'] = pd.to_numeric(tabla2['saldo'].str.replace(r'[^0-9.,]', '', regex=True).str.replace(',', ''), errors='coerce')
     except Exception as e:
         print(f"Error al convertir saldo: {e}")
     return tabla2

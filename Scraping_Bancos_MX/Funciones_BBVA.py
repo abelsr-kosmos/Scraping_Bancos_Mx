@@ -56,7 +56,6 @@ def obtener_coordenadas(pagina):
 def identificar_campos(coordenada):
         if(coordenada) <= 55 and coordenada >= 0:
             return "Oper"
-
         elif(coordenada) <= 100 and coordenada >= 55:
             return "Fecha"
         elif(coordenada) <= 314 and coordenada >= 100:

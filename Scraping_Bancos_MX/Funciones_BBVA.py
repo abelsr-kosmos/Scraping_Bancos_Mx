@@ -63,7 +63,7 @@ def identificar_campos(coordenada):
             return "Descripcion"
         elif(coordenada) <= 420 and coordenada >= 314:
             return "Cargos"
-        elif(coordenada) <= 463 and coordenada >= 420:
+        elif(coordenada) <= 466 and coordenada >= 420:
             return "Abono"
         else:
             return "-"
@@ -73,7 +73,7 @@ def identificar_numero_de_linea(df):
     df = df.copy()  # Avoid modifying the original DataFrame
     df["tipo"] = df["right"].apply(identificar_campos)
     df['prev_top'] = df['top'].shift(1)
-    condition = df['top'] > (df['prev_top'] + df['height'])
+    condition = df['top'] > (df['prev_top'] + (df['height'] * 0.7))
     df['linea'] = condition.cumsum().fillna(0).astype(int)
     df.drop('prev_top', axis=1, inplace=True)
     return df
@@ -203,7 +203,10 @@ def unificar_movimientos(df):
     for index,fila in df.iterrows():
         descripcion = descripcion + "|" + fila["Descripcion"]
 
-    referencia = df.iloc[1,3]
+    try:
+        referencia = df.iloc[1,3]
+    except:
+        referencia = " - "
     moviemiento = {"Operacion":df.iloc[0,0],"Fecha":df.iloc[0,1],"Descripcion":descripcion,"Referencia":referencia, "Cargo":df.iloc[0,3],"Abono":df.iloc[0,4],"Movimiento":df.iloc[0,5]}
     return moviemiento
 

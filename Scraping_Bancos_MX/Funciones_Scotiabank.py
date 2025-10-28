@@ -179,7 +179,10 @@ def analisis_concepto(df):
     for index,row in df.iterrows():
         concepto = "-"
         if re.search("SPEI",row["Concepto"]):
-            concepto = row["Concepto"].split("|")[3]
+            try:
+                concepto = row["Concepto"].split("|")[3]
+            except:
+                concepto = "-"
         try:
             concepto = concepto.replace("/","")
         except:
@@ -192,7 +195,10 @@ def analisis_institucion_contraparte(df):
     for index,row in df.iterrows():
         banco = "Sin contraparte"
         if re.search("SPEI",row["Concepto"]):
-            banco = row["Concepto"].split("|")[2]
+            try:
+                banco = row["Concepto"].split("|")[2]
+            except:
+                banco = "Sin contraparte"
 
         df.loc[index,"InstitucionContraparte"] = banco
 

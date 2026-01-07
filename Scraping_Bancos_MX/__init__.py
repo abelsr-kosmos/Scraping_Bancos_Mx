@@ -10,3 +10,5 @@ from .Funciones_HeyBanco import *
 from .Funciones_Banamex import *
 from .Funciones_Azteca import *
 from .Funciones_HSBC import *
+from .Funciones_MercadoPago import *
+from .Funciones_Nu import *

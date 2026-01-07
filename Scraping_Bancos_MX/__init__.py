@@ -12,3 +12,4 @@ from .Funciones_Azteca import *
 from .Funciones_HSBC import *
 from .Funciones_MercadoPago import *
 from .Funciones_Nu import *
+from .Funciones_Bancoppel import *

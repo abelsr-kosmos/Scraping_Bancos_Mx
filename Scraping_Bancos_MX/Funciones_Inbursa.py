@@ -1,6 +1,9 @@
-import pandas as pd
 import re
+from typing import List, Dict
+from dataclasses import dataclass
+
 import pdfplumber
+import pandas as pd
 
 def Scrap_Estado(ruta_archivo):
     estado = pdfplumber.open(ruta_archivo)
@@ -193,7 +196,7 @@ def incluir_movimientos(df):
     df["Movimiento"] = 0
     contador_movimiento = 0
     for index, fila in df.iterrows():
-        if  re.match("\w{3} \d{2}", fila["Fecha"]):
+        if  re.match(r"\w{3} \d{2}", fila["Fecha"]):
             contador_movimiento += 1 
         
         df.loc[index,"Movimiento"] = contador_movimiento
@@ -212,3 +215,192 @@ def unificar_tabla(df):
     for movimiento in df["Movimiento"].unique():
         movimientos_unificados.append(unificar_movimiento(df[df["Movimiento"]==movimiento]))
     return pd.DataFrame(movimientos_unificados)
+
+@dataclass
+class InbursaExtractor:
+    """
+    Extrae movimientos de estados de cuenta (formato tipo tabla) desde PDFs.
+    
+    Flujo:
+    - Lee todas las páginas con pdfplumber
+    - Identifica páginas de movimientos por encabezado
+    - Parseo con regex (date/ref/concept/amount/balance)
+    - Construye DataFrame
+    - Convierte monto/saldo a numérico
+    - Infere signo del monto comparando saldo actual vs saldo previo
+    - Genera columnas retiros/depositos
+    """
+
+    header_regex: str = r"\bFECHA REFERENCIA CONCEPTO CARGOS ABONOS SALDO\b"
+    movement_pattern: str = (
+        r"(?P<date>[A-Z]{3} \d{1,2})\s+"
+        r"(?:(?P<ref>\d+)\s+)?"
+        r"(?P<concept>.+?)\s+"
+        r"(?:(?P<amount>[\d,]+\.\d{2})\s+)?"
+        r"(?P<balance>[\d,]+\.\d{2})"
+    )
+
+    def extract(self, pdf_path: str) -> pd.DataFrame:
+        """
+        Método principal: devuelve el DataFrame final:
+        ['fecha', 'descripcion', 'retiros', 'depositos', 'saldo']
+        """
+        pages_text = self._read_pdf_text(pdf_path)
+        movements_pages = self._filter_movement_pages(pages_text)
+        movements = self._parse_movements_pages(movements_pages)
+
+        df = self._to_dataframe(movements)
+        df = self._normalize_numeric(df)
+        df = self._infer_amount_sign_from_balance(df)
+        df = self._add_withdrawals_deposits(df)
+
+        return df[["fecha", "descripcion", "retiros", "depositos", "saldo"]]
+
+    # -------------------------
+    # Step 1: Read PDF
+    # -------------------------
+    def _read_pdf_text(self, pdf_path: str) -> List[str]:
+        all_text: List[str] = []
+        with pdfplumber.open(pdf_path) as pdf:
+            for page in pdf.pages:
+                all_text.append(page.extract_text() or "")
+        return all_text
+
+    # -------------------------
+    # Step 2: Filter pages
+    # -------------------------
+    def _filter_movement_pages(self, pages_text: List[str]) -> List[str]:
+        movements_pages: List[str] = []
+        for idx, page_text in enumerate(pages_text, start=1):
+            if re.search(self.header_regex, page_text):
+                movements_pages.append(page_text)
+        return movements_pages
+
+    # -------------------------
+    # Step 3: Parse movements
+    # -------------------------
+    def _parse_movements_pages(self, movements_pages: List[str]) -> List[Dict[str, str]]:
+        movements: List[Dict[str, str]] = []
+        pattern = re.compile(self.movement_pattern)
+
+        for page in movements_pages:
+            matches = list(pattern.finditer(page))
+            last_end = 0
+
+            for i, match in enumerate(matches):
+                start = match.start()
+                between_text = page[last_end:start].strip() if i > 0 else ""
+                last_end = match.end()
+
+                date = match.group("date") or ""
+                ref = match.group("ref") or ""
+                concept = match.group("concept") or ""
+                amount = match.group("amount") or ""
+                balance = match.group("balance") or ""
+
+                descripcion = self._build_description(ref, concept, between_text)
+
+                movements.append(
+                    {
+                        "fecha": date,
+                        "descripcion": descripcion,
+                        "monto": amount,
+                        "saldo": balance,
+                    }
+                )
+
+        return movements
+
+    def _build_description(self, ref: str, concept: str, between_text: str) -> str:
+        # Respeta tu lógica: ref + espacio + concept + espacio + between_text
+        parts = []
+        if ref:
+            parts.append(ref)
+        if concept:
+            parts.append(concept)
+        if between_text:
+            parts.append(between_text)
+        return " ".join(parts).strip()
+
+    # -------------------------
+    # Step 4: Build DataFrame
+    # -------------------------
+    def _to_dataframe(self, movements: List[Dict[str, str]]) -> pd.DataFrame:
+        return pd.DataFrame(movements)
+
+    # -------------------------
+    # Step 5: Normalize numeric
+    # -------------------------
+    def _normalize_numeric(self, df: pd.DataFrame) -> pd.DataFrame:
+        # Nota: amount puede venir vacío -> NaN
+        df = df.copy()
+
+        df["monto"] = pd.to_numeric(
+            df["monto"].astype(str).str.replace(",", "", regex=False),
+            errors="coerce",
+        )
+        df["saldo"] = pd.to_numeric(
+            df["saldo"].astype(str).str.replace(",", "", regex=False),
+            errors="coerce",
+        )
+        return df
+
+    # -------------------------
+    # Step 6: Infer sign
+    # -------------------------
+    def _infer_amount_sign_from_balance(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Replica tu lógica:
+        - saldo_inicial = saldo de la primera fila
+        - para cada fila siguiente:
+            si saldo_actual - saldo_inicial > 0 => monto queda igual (depósito)
+            si no => monto = -monto (retiro)
+          luego saldo_inicial = saldo_actual
+        
+        ⚠️ Nota nerd: este método asume que cada fila cambia el saldo
+        y que el monto corresponde al delta entre saldos. Si hay filas
+        sin monto (NaN) o movimientos raros, se conserva NaN.
+        """
+        df = df.copy()
+
+        if df.empty:
+            return df
+
+        saldo_prev = df["saldo"].iloc[0]
+
+        for i in range(1, len(df)):
+            saldo_actual = df.at[i, "saldo"]
+            monto = df.at[i, "monto"]
+
+            # Si alguno es NaN, no tocamos
+            if pd.isna(saldo_prev) or pd.isna(saldo_actual) or pd.isna(monto):
+                saldo_prev = saldo_actual
+                continue
+
+            # Si el saldo sube -> depósito (monto positivo)
+            # Si el saldo baja o no sube -> retiro (monto negativo)
+            if (saldo_actual - saldo_prev) <= 0:
+                df.at[i, "monto"] = -abs(monto)
+            else:
+                df.at[i, "monto"] = abs(monto)
+
+            saldo_prev = saldo_actual
+
+        return df
+
+    # -------------------------
+    # Step 7: Add retiros/depositos
+    # -------------------------
+    def _add_withdrawals_deposits(self, df: pd.DataFrame) -> pd.DataFrame:
+        df = df.copy()
+        df["retiros"] = df["monto"].apply(lambda x: -x if pd.notna(x) and x < 0 else None)
+        df["depositos"] = df["monto"].apply(lambda x: x if pd.notna(x) and x > 0 else None)
+        return df
+
+
+if __name__ == "__main__":
+    extractor = InbursaExtractor()
+    pdf_path = "/mnt/d/Documentos/Trabajo/Kosmos/OCR-General/Scraping_Bancos_Mx/proto/data/2mS8nfw-EdoCuenta_Inbursaabril2022 (1).pdf"
+    movimientos_df = extractor.extract(pdf_path)
+    movimientos_df.to_csv("inbursa_movimientos.csv", index=False)
+    print(movimientos_df)

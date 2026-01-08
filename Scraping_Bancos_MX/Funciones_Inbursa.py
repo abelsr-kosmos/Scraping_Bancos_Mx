@@ -1,6 +1,6 @@
 import re
-from typing import List, Dict
 from dataclasses import dataclass
+from typing import List, Dict, Optional
 
 import pdfplumber
 import pandas as pd
@@ -218,22 +218,14 @@ def unificar_tabla(df):
 
 @dataclass
 class InbursaExtractor:
-    """
-    Extrae movimientos de estados de cuenta (formato tipo tabla) desde PDFs.
-    
-    Flujo:
-    - Lee todas las páginas con pdfplumber
-    - Identifica páginas de movimientos por encabezado
-    - Parseo con regex (date/ref/concept/amount/balance)
-    - Construye DataFrame
-    - Convierte monto/saldo a numérico
-    - Infere signo del monto comparando saldo actual vs saldo previo
-    - Genera columnas retiros/depositos
-    """
-
     header_regex: str = r"\bFECHA REFERENCIA CONCEPTO CARGOS ABONOS SALDO\b"
+
+    # FECHA DE CORTE 30 Abr 2022  (solo aparece en la primera página)
+    corte_date_regex: str = r"FECHA DE CORTE\s+(\d{1,2}\s+\w{3}\s+\d{4})"
+
+    # Movimiento: "ABR 28  12345  CONCEPTO ...  1,234.00  9,999.99"
     movement_pattern: str = (
-        r"(?P<date>[A-Z]{3} \d{1,2})\s+"
+        r"(?P<date>[A-Z]{3}\s+\d{1,2})\s+"
         r"(?:(?P<ref>\d+)\s+)?"
         r"(?P<concept>.+?)\s+"
         r"(?:(?P<amount>[\d,]+\.\d{2})\s+)?"
@@ -241,13 +233,18 @@ class InbursaExtractor:
     )
 
     def extract(self, pdf_path: str) -> pd.DataFrame:
-        """
-        Método principal: devuelve el DataFrame final:
-        ['fecha', 'descripcion', 'retiros', 'depositos', 'saldo']
-        """
         pages_text = self._read_pdf_text(pdf_path)
+
+        year = self._extract_year_from_first_page(pages_text[0] if pages_text else "")
+        if year is None:
+            # Si no aparece la fecha de corte, puedes:
+            # - levantar error
+            # - o dejar el año vacío
+            # Aquí lo dejo como error explícito porque tu pipeline depende del año.
+            raise ValueError("No se pudo extraer el año: no encontré 'FECHA DE CORTE DD Mmm YYYY' en la primera página.")
+
         movements_pages = self._filter_movement_pages(pages_text)
-        movements = self._parse_movements_pages(movements_pages)
+        movements = self._parse_movements_pages(movements_pages, year=year)
 
         df = self._to_dataframe(movements)
         df = self._normalize_numeric(df)
@@ -267,19 +264,35 @@ class InbursaExtractor:
         return all_text
 
     # -------------------------
-    # Step 2: Filter pages
+    # Step 2: Extract year
+    # -------------------------
+    def _extract_year_from_first_page(self, first_page_text: str) -> Optional[int]:
+        # case-insensitive porque suele venir "Abr" vs "ABR"
+        m = re.search(self.corte_date_regex, first_page_text, flags=re.IGNORECASE)
+        if not m:
+            return None
+
+        corte_date = m.group(1)  # "30 Abr 2022"
+        try:
+            year = int(corte_date.split()[-1])
+            return year
+        except Exception:
+            return None
+
+    # -------------------------
+    # Step 3: Filter movement pages
     # -------------------------
     def _filter_movement_pages(self, pages_text: List[str]) -> List[str]:
         movements_pages: List[str] = []
-        for idx, page_text in enumerate(pages_text, start=1):
-            if re.search(self.header_regex, page_text):
+        for page_text in pages_text:
+            if re.search(self.header_regex, page_text or ""):
                 movements_pages.append(page_text)
         return movements_pages
 
     # -------------------------
-    # Step 3: Parse movements
+    # Step 4: Parse movements
     # -------------------------
-    def _parse_movements_pages(self, movements_pages: List[str]) -> List[Dict[str, str]]:
+    def _parse_movements_pages(self, movements_pages: List[str], year: int) -> List[Dict[str, str]]:
         movements: List[Dict[str, str]] = []
         pattern = re.compile(self.movement_pattern)
 
@@ -292,7 +305,9 @@ class InbursaExtractor:
                 between_text = page[last_end:start].strip() if i > 0 else ""
                 last_end = match.end()
 
-                date = match.group("date") or ""
+                date_raw = match.group("date") or ""  # "ABR 28"
+                date_fixed = self._fix_date(date_raw, year=year)  # "28 ABR 2022"
+
                 ref = match.group("ref") or ""
                 concept = match.group("concept") or ""
                 amount = match.group("amount") or ""
@@ -302,7 +317,7 @@ class InbursaExtractor:
 
                 movements.append(
                     {
-                        "fecha": date,
+                        "fecha": date_fixed,
                         "descripcion": descripcion,
                         "monto": amount,
                         "saldo": balance,
@@ -311,8 +326,19 @@ class InbursaExtractor:
 
         return movements
 
+    def _fix_date(self, date_raw: str, year: int) -> str:
+        """
+        Convierte "ABR 28" -> "28 ABR 2022"
+        (mantengo tu formato porque parece lo que quieres visualizar)
+        """
+        parts = date_raw.split()
+        if len(parts) != 2:
+            return f"{date_raw} {year}".strip()
+
+        mon, day = parts[0], parts[1]
+        return f"{day} {mon} {year}"
+
     def _build_description(self, ref: str, concept: str, between_text: str) -> str:
-        # Respeta tu lógica: ref + espacio + concept + espacio + between_text
         parts = []
         if ref:
             parts.append(ref)
@@ -323,18 +349,15 @@ class InbursaExtractor:
         return " ".join(parts).strip()
 
     # -------------------------
-    # Step 4: Build DataFrame
+    # Step 5: DataFrame + numeric
     # -------------------------
     def _to_dataframe(self, movements: List[Dict[str, str]]) -> pd.DataFrame:
         return pd.DataFrame(movements)
 
-    # -------------------------
-    # Step 5: Normalize numeric
-    # -------------------------
     def _normalize_numeric(self, df: pd.DataFrame) -> pd.DataFrame:
-        # Nota: amount puede venir vacío -> NaN
         df = df.copy()
 
+        # ojo: si "monto" puede ser "" necesitamos astype(str) para no explotar con .str
         df["monto"] = pd.to_numeric(
             df["monto"].astype(str).str.replace(",", "", regex=False),
             errors="coerce",
@@ -346,23 +369,10 @@ class InbursaExtractor:
         return df
 
     # -------------------------
-    # Step 6: Infer sign
+    # Step 6: Infer sign (tu lógica)
     # -------------------------
     def _infer_amount_sign_from_balance(self, df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Replica tu lógica:
-        - saldo_inicial = saldo de la primera fila
-        - para cada fila siguiente:
-            si saldo_actual - saldo_inicial > 0 => monto queda igual (depósito)
-            si no => monto = -monto (retiro)
-          luego saldo_inicial = saldo_actual
-        
-        ⚠️ Nota nerd: este método asume que cada fila cambia el saldo
-        y que el monto corresponde al delta entre saldos. Si hay filas
-        sin monto (NaN) o movimientos raros, se conserva NaN.
-        """
         df = df.copy()
-
         if df.empty:
             return df
 
@@ -372,13 +382,10 @@ class InbursaExtractor:
             saldo_actual = df.at[i, "saldo"]
             monto = df.at[i, "monto"]
 
-            # Si alguno es NaN, no tocamos
             if pd.isna(saldo_prev) or pd.isna(saldo_actual) or pd.isna(monto):
                 saldo_prev = saldo_actual
                 continue
 
-            # Si el saldo sube -> depósito (monto positivo)
-            # Si el saldo baja o no sube -> retiro (monto negativo)
             if (saldo_actual - saldo_prev) <= 0:
                 df.at[i, "monto"] = -abs(monto)
             else:
@@ -389,13 +396,14 @@ class InbursaExtractor:
         return df
 
     # -------------------------
-    # Step 7: Add retiros/depositos
+    # Step 7: retiros / depositos
     # -------------------------
     def _add_withdrawals_deposits(self, df: pd.DataFrame) -> pd.DataFrame:
         df = df.copy()
         df["retiros"] = df["monto"].apply(lambda x: -x if pd.notna(x) and x < 0 else None)
         df["depositos"] = df["monto"].apply(lambda x: x if pd.notna(x) and x > 0 else None)
         return df
+
 
 
 if __name__ == "__main__":

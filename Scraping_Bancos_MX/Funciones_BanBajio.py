@@ -226,7 +226,7 @@ def analisis_contraparte(df):
             beneficiario = beneficiario.split("|")[0]
             df.loc[index,"Contraparte"] = beneficiario
         elif re.search("COMPRA-DISPOSICION",row["Descripcion"]):
-            separador = re.search("\d{2}\w{3}\d{4}",row["Descripcion"])
+            separador = re.search(r"\d{2}\w{3}\d{4}",row["Descripcion"])
             beneficiario = row["Descripcion"].split(separador.group())[1]
             beneficiario = beneficiario.split("$")[0]
             df.loc[index,"Contraparte"] = beneficiario

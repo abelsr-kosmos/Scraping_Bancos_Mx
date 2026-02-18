@@ -184,7 +184,7 @@ def incluir_movimientos(df):
     df["Movimiento"] = 0
     contador_movimiento = 0
     for index, fila in df.iterrows():
-        if  re.match("\d{2}-\w{3}-\d{4}", fila["Fecha"]):
+        if  re.match(r"\d{2}-\w{3}-\d{4}", fila["Fecha"]):
             contador_movimiento += 1 
         
         df.loc[index,"Movimiento"] = contador_movimiento

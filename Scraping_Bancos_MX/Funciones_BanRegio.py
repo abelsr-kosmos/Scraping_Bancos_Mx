@@ -143,7 +143,7 @@ def incluir_movimientos(df):
     df["Movimiento"] = 0
     contador_movimiento = 0
     for index, fila in df.iterrows():
-        if  re.match("\d{2}", fila["Fecha"]):
+        if  re.match(r"\d{2}", fila["Fecha"]):
             contador_movimiento += 1 
         df.loc[index,"Movimiento"] = contador_movimiento
     return df
@@ -159,14 +159,14 @@ def extraer_movimientos_pagina(pagina,texto):
 
 def incluir_anio_mes(filas,texto):
     anios = {"ENERO":1,"FEBRERO":2,"MARZO":3,"ABRIL":4,"MAYO":5,"JUNIO":6,"JULIO":7,"AGOSTO":8,"SEPTIEMBRE":9,"OCTUBRE":10,"NOVIEMBRE":11,"DICIEMBRE":12}
-    periodo = re.search("del\d{2}al\d{2}de\w+\d{4}",texto)
+    periodo = re.search(r"del\d{2}al\d{2}de\w+\d{4}",texto)
     periodo = periodo.group(0).replace("del","")
     periodo = periodo.split("de")[1]
     anio = periodo[-4:]
     mes = periodo[:-4]
     mes = anios[mes.upper()]
     for index, fila in filas.iterrows():
-        if  re.match("\d{2}", fila["Fecha"]):
+        if  re.match(r"\d{2}", fila["Fecha"]):
             filas.loc[index,"Fecha"] = fila["Fecha"] + "/" + str(mes) + "/" + str(anio)
 
 

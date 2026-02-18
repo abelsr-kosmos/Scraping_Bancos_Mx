@@ -134,7 +134,7 @@ def incluir_anio_mes(filas,texto):
     anio = periodo.group(0)[5:]
     mes =  periodo.group(0)[2:5]
     for index, fila in filas.iterrows():
-        if  re.match("\d{2}", fila["Fecha"]):
+        if  re.match(r"\d{2}", fila["Fecha"]):
             filas.loc[index,"Fecha"] = fila["Fecha"] + "/" + str(mes) + "/" + str(anio)
     return filas
 

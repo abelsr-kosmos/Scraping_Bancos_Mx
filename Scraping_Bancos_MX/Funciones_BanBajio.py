@@ -26,7 +26,7 @@ def extraer_movimientos_primera_pagina(pagina):
         texto = texto[2:]
         if ultima_pagina:
             texto = texto[:-3]
-        if re.search("^\d{4}$",periodo):
+        if re.search(r"^\d{4}$",periodo):
             texto += f" °{periodo}°"
         return texto
 
@@ -34,7 +34,7 @@ def scrap_movimientos(movimientos):
     numero_movimiento = 0
     movimientos_identificados = []
     for movimiento in movimientos:
-        if re.match("\d{1,2} \w{3}",movimiento):
+        if re.match(r"\d{1,2} \w{3}",movimiento):
             numero_movimiento += 1
         movimientos_identificados.append({"movimiento":movimiento,"numero_movimiento":numero_movimiento})
         

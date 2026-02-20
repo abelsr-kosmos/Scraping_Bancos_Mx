@@ -3,8 +3,6 @@ from typing import Tuple, Optional
 
 import pdfplumber
 import pandas as pd
-from rich.console import Console
-from rich.table import Table
 
 
 # Límites de columnas del PDF de Banjercito (x0, x1) obtenidos de los

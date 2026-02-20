@@ -2,9 +2,25 @@ import pandas as pd
 import re
 import pdfplumber
 
+MARCADORES_CORTE_TEXTO = ["SALDO TOTAL*", "TOTAL DE MOVIMIENTOS EN EL PERIODO", "RESUMEN DEL PERIODO"]
+MARCADORES_FIN_MOVIMIENTOS = [
+    "TOTAL DE MOVIMIENTOS EN EL PERIODO",
+    "RESUMEN DEL PERIODO",
+    "CODIGO",
+    "CÓDIGO",
+    "SELLO DIGITAL",
+    "CADENA ORIGINAL",
+    "CERTIFICACION DIGITAL",
+    "NOMBRE O RAZON SOCIAL DEL RECEPTOR",
+    "NOMBRE O RAZÓN SOCIAL DEL RECEPTOR",
+]
+
+RE_FECHA_CORTA = re.compile(r"\d{1,2}\ \w{3}")
+RE_REFERENCIA = re.compile(r"\b\d{7,}\b")
+
 def Scrap_Estado(ruta_archivo):
-    estado = pdfplumber.open(ruta_archivo)
-    tabla = analizar_estado(estado)
+    with pdfplumber.open(ruta_archivo) as estado:
+        tabla = analizar_estado(estado)
     tabla = analisis_movimientos(tabla)
     tabla = formatear_tabla(tabla)
     return tabla
@@ -38,27 +54,35 @@ def formatear_tabla(df):
     return df
 
 def extraer_movimientos_primera_pagina(pagina):
-    texto_pagina = pagina.extract_text() or ""
+    texto_pagina = pagina.extract_text_simple() or pagina.extract_text() or ""
+
+    return _extraer_movimientos_desde_texto(texto_pagina)
+
+def _extraer_movimientos_desde_texto(texto_pagina):
+    if "FECHA DESCRIPCION DE LA OPERACION" not in texto_pagina:
+        return False
+
     periodo = texto_pagina.split("\n")
-    periodo = periodo[1].split(" ")
-    periodo = periodo[-1]
-    texto = texto_pagina.split("FECHA DESCRIPCION DE LA OPERACION")
+    if len(periodo) < 2:
+        return False
+    periodo = periodo[1].split(" ")[-1]
+    texto = texto_pagina.split("FECHA DESCRIPCION DE LA OPERACION", 1)
 
     ultima_pagina = False
     if len(texto) == 1:
         return False
     else:
-        texto = texto_pagina.split("FECHA DESCRIPCION DE LA OPERACION")[1]
-        texto = texto.split("CONTINUA EN LA SIGUIENTE PAGINA")[0]
-        if re.search("TOTAL DE MOVIMIENTOS EN EL PERIODO",texto):
+        texto = texto[1]
+        texto = texto.split("CONTINUA EN LA SIGUIENTE PAGINA", 1)[0]
+        if "TOTAL DE MOVIMIENTOS EN EL PERIODO" in texto:
             ultima_pagina = True
-        for marcador in ["SALDO TOTAL*", "TOTAL DE MOVIMIENTOS EN EL PERIODO", "RESUMEN DEL PERIODO"]:
-            texto = texto.split(marcador)[0]
+        for marcador in MARCADORES_CORTE_TEXTO:
+            texto = texto.split(marcador, 1)[0]
         texto = texto.split("\n")
         texto = texto[2:]
         if ultima_pagina:
             texto = texto[:-3]
-        if re.search(r"^\d{4}$",periodo):
+        if periodo.isdigit() and len(periodo) == 4:
             texto.append(f"°{periodo}°")
         return texto
 
@@ -66,24 +90,12 @@ def scrap_movimientos(movimientos):
     numero_movimiento = 0
     movimientos_identificados = []
 
-    marcadores_fin = [
-        "TOTAL DE MOVIMIENTOS EN EL PERIODO",
-        "RESUMEN DEL PERIODO",
-        "CODIGO",
-        "CÓDIGO",
-        "SELLO DIGITAL",
-        "CADENA ORIGINAL",
-        "CERTIFICACION DIGITAL",
-        "NOMBRE O RAZON SOCIAL DEL RECEPTOR",
-        "NOMBRE O RAZÓN SOCIAL DEL RECEPTOR",
-    ]
-
     for movimiento in movimientos:
         if not str(movimiento).strip():
             continue
 
         movimiento_mayus = str(movimiento).upper()
-        if any(marcador in movimiento_mayus for marcador in marcadores_fin):
+        if any(marcador in movimiento_mayus for marcador in MARCADORES_FIN_MOVIMIENTOS):
             break
 
         if re.match(r"\d{1,2} \w{3}",movimiento):
@@ -114,13 +126,10 @@ def obtener_montos_movimiento(movimiento):
     return monto,saldo
 
 def extraer_montos_saldos(movimientos):
-    movimientos["Monto"] = ""
-    movimientos["Saldo"] = ""
-    for index,fila in movimientos.iterrows():
-        movimiento =fila["movimiento"]
-        monto,saldo = obtener_montos_movimiento(movimiento)
-        movimientos.loc[index,"Monto"] = str(monto)
-        movimientos.loc[index,"Saldo"] = str(saldo)
+    movimientos = movimientos.copy()
+    montos_saldos = movimientos["movimiento"].astype(str).map(obtener_montos_movimiento)
+    movimientos["Monto"] = montos_saldos.str[0].astype(str)
+    movimientos["Saldo"] = montos_saldos.str[1].astype(str)
     return movimientos
 
 def unificar_movimiento(df):
@@ -135,104 +144,87 @@ def unificar_tabla(movimmientos):
     if movimmientos.empty:
         return pd.DataFrame(columns=["Descripcion", "Movimiento", "Monto", "Saldo"])
 
-    movimientos_unificados = []
-    for i in sorted(movimmientos["numero_movimiento"].unique()):
-        subset = movimmientos[movimmientos["numero_movimiento"] == i]
-        if subset.empty:
-            continue
-        movimientos_unificados.append(unificar_movimiento(subset))
-    return pd.DataFrame(movimientos_unificados)
+    tabla = (
+        movimmientos.groupby("numero_movimiento", sort=False)
+        .agg(
+            Descripcion=("movimiento", lambda serie: "|" + "|".join(serie.astype(str))),
+            Monto=("Monto", "first"),
+            Saldo=("Saldo", "first"),
+        )
+        .reset_index()
+        .rename(columns={"numero_movimiento": "Movimiento"})
+    )
+    return tabla[["Descripcion", "Movimiento", "Monto", "Saldo"]]
 
 def extraer_movimientos_estado_de_cuenta(estado):
     movimientos = []
+    en_tabla = False
+
     for pag in estado.pages:
-        movs = extraer_movimientos_primera_pagina(pag)
-        if  movs:
-            movimientos = movimientos + movs
+        texto_pagina = pag.extract_text_simple() or pag.extract_text() or ""
+        movs = _extraer_movimientos_desde_texto(texto_pagina)
+        if movs:
+            en_tabla = True
+            movimientos.extend(movs)
+            continue
+
+        if en_tabla:
+            break
+
     return movimientos
     
 
 def identificar_cargo_abono(df):
+    df = df.copy()
     df["Cargos"] = ""
     df["Abonos"] = ""
 
-    def limpiar_numero(valor):
-        texto = str(valor).replace(",", "").strip()
-        if texto in ["", "-1", "nan", "None"]:
-            return None
-        try:
-            return float(texto)
-        except (TypeError, ValueError):
-            return None
+    saldo = pd.to_numeric(df["Saldo"].astype(str).str.replace(",", "", regex=False), errors="coerce")
+    monto = pd.to_numeric(df["Monto"].astype(str).str.replace(",", "", regex=False), errors="coerce")
 
-    def clasificar_sin_saldo_anterior(descripcion, monto_num):
-        if monto_num is None:
-            return ""
+    saldo_anterior = saldo.shift(1)
+    saldo_ideal = (saldo_anterior + monto).round(2)
 
-        descripcion_mayus = str(descripcion).upper()
-        claves_abono = ["DEPÓSITO", "DEPOSITO", "ABONO", "RECIBIDO", "ORDENANTE:"]
-        claves_cargo = ["ENVÍO", "ENVIO", "COMPRA", "DISPOSICION", "PAGO", "COMISION", "IVA", "BENEFICIARIO:"]
+    mask_base = saldo.notna() & saldo_anterior.notna() & monto.notna()
+    mask_abono = mask_base & (saldo == saldo_ideal)
+    mask_cargo = mask_base & ~mask_abono
 
-        if monto_num < 0:
-            return "CARGOS"
-        if any(clave in descripcion_mayus for clave in claves_abono):
-            return "ABONOS"
-        if any(clave in descripcion_mayus for clave in claves_cargo):
-            return "CARGOS"
-        return "CARGOS"
+    monto_txt = monto.abs().map(lambda x: f"{x:.2f}" if pd.notna(x) else "")
+    df.loc[mask_abono, "Abonos"] = monto_txt[mask_abono]
+    df.loc[mask_cargo, "Cargos"] = monto_txt[mask_cargo]
 
-    for i in range(1,df.shape[0]):
-        saldo_anterior = limpiar_numero(df.iloc[i-1,3])
-        saldo_actual = limpiar_numero(df.iloc[i,3])
-        monto_num = limpiar_numero(df.iloc[i,2])
-        if saldo_anterior is None or saldo_actual is None or monto_num is None:
-            continue
+    mask_pendiente = (
+        (df["Cargos"].astype(str).str.strip() == "")
+        & (df["Abonos"].astype(str).str.strip() == "")
+        & monto.notna()
+    )
 
-        saldo_ideal = saldo_anterior + monto_num
-        saldo_ideal = round(saldo_ideal,2)
-        monto = str(df.iloc[i,2]).replace(",","")
-        if saldo_actual != saldo_ideal:
-            df.loc[i,"Cargos"] = monto
-        else:
-            df.loc[i,"Abonos"] = monto  
+    descripcion_mayus = df["Descripcion"].fillna("").astype(str).str.upper()
+    mask_claves_abono = descripcion_mayus.str.contains(r"DEPÓSITO|DEPOSITO|ABONO|RECIBIDO|ORDENANTE:", regex=True)
+    mask_claves_cargo = descripcion_mayus.str.contains(r"ENVÍO|ENVIO|COMPRA|DISPOSICION|PAGO|COMISION|IVA|BENEFICIARIO:", regex=True)
 
-    for i in range(df.shape[0]):
-        if str(df.loc[i, "Cargos"]).strip() != "" or str(df.loc[i, "Abonos"]).strip() != "":
-            continue
+    mask_fallback_cargo = mask_pendiente & ((monto < 0) | mask_claves_cargo | ~mask_claves_abono)
+    mask_fallback_abono = mask_pendiente & ~mask_fallback_cargo
 
-        monto_num = limpiar_numero(df.loc[i, "Monto"])
-        if monto_num is None:
-            continue
-
-        clasificacion = clasificar_sin_saldo_anterior(df.loc[i, "Descripcion"], monto_num)
-        monto_texto = f"{abs(monto_num):.2f}" if monto_num is not None else ""
-        if clasificacion == "ABONOS":
-            df.loc[i, "Abonos"] = monto_texto
-        elif clasificacion == "CARGOS":
-            df.loc[i, "Cargos"] = monto_texto
+    df.loc[mask_fallback_abono, "Abonos"] = monto_txt[mask_fallback_abono]
+    df.loc[mask_fallback_cargo, "Cargos"] = monto_txt[mask_fallback_cargo]
 
     return df
 
 def separar_fecha(df):
-    df["Fecha"] = None  # Crear la columna "Fecha" inicialmente con valores nulos
-    for index, row in df.iterrows():
-        texto = row["Descripcion"]
-        matches = re.findall(r"\d{1,2}\ \w{3}", texto)
-        if len(matches) > 0:
-            fecha = matches[0]
-            df.at[index, "Fecha"] = fecha
-            df.at[index, "Descripcion"] = re.sub(r"\d{1,2}\ \w{3}", "", texto, count=1)
+    df = df.copy()
+    descripcion = df["Descripcion"].fillna("").astype(str)
+    fecha = descripcion.str.extract(r"(\d{1,2}\ \w{3})", expand=False)
+    df["Fecha"] = fecha
+    df["Descripcion"] = descripcion.str.replace(RE_FECHA_CORTA, "", n=1, regex=True)
     return df
 
 def separar_referencia(df):
-    df["Referencia"] = "-"  
-    for index, row in df.iterrows():
-        texto = row["Descripcion"]
-        matches = re.findall(r"\b\d{7,}\b", texto)
-        if len(matches) > 0:
-            referencia = matches[0]
-            df.at[index, "Referencia"] = referencia
-            df.at[index, "Descripcion"] = re.sub(r"\b\d{7,}\b", "", texto, count=1)
+    df = df.copy()
+    descripcion = df["Descripcion"].fillna("").astype(str)
+    referencia = descripcion.str.extract(r"(\b\d{7,}\b)", expand=False)
+    df["Referencia"] = referencia.fillna("-")
+    df["Descripcion"] = descripcion.str.replace(RE_REFERENCIA, "", n=1, regex=True)
     return df
 
 def incluir_anio(df):

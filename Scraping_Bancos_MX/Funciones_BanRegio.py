@@ -1,8 +1,8 @@
 import re
 
 import pdfplumber
-import pandas as pd
 import numpy as np
+import pandas as pd
 
 RE_SPEI = re.compile(r"SPEI")
 RE_TRA_INT = re.compile(r"TRA|INT")
@@ -339,27 +339,3 @@ def eliminar_movimientos_no_deseados(filas):
 
 
     return filas
-
-
-if __name__ == "__main__":
-    import cProfile
-    import pstats
-    from io import StringIO
-    
-    pr = cProfile.Profile()
-    pr.enable()
-    
-    ruta_archivo = "/home/abelsr/Proyects/OCR-General/Scraping_Bancos_Mx/notebooks/gettablefileurl (59).pdf"
-    df = Scrap_Estado(ruta_archivo)
-    
-    pr.disable()
-    s = StringIO()
-    ps = pstats.Stats(pr, stream=s).sort_stats('cumulative')
-    ps.print_stats(20)  # Top 20 functions
-    print(s.getvalue())
-    
-    # To ensure results
-    df["descripcion"] = df["descripcion"].str[:20]
-    print(df.head())
-    print(f"Total depositos: {df['deposito'].notna().sum()}, Total retiros: {df['retiro'].notna().sum()}")
-    print(f"Suma depositos: {df['deposito'].sum()}, Suma retiros: {df['retiro'].sum()}")

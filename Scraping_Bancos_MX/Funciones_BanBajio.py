@@ -5,8 +5,19 @@ import pdfplumber
 def Scrap_Estado(ruta_archivo):
     estado = pdfplumber.open(ruta_archivo)
     tabla = analizar_estado(estado)
-    tabla2 = analisis_movimientos(tabla)
-    return tabla2
+    tabla = analisis_movimientos(tabla)
+    tabla = formatear_tabla(tabla)
+    return tabla
+
+def formatear_tabla(df):
+    df = df.copy()
+    df['descripcion'] = df['Origen'] + " " + df['Concepto'].str.replace("|"," ")
+    df['fecha'] = df['Fecha']
+    df['deposito'] = df['Deposito']
+    df['retiro'] = df['Retiro']
+    df['saldo'] = df['Saldo']
+    df = df[['fecha', 'descripcion', 'deposito', 'retiro', 'saldo']]
+    return df
 
 def extraer_movimientos_primera_pagina(pagina):
     periodo = pagina.extract_text().split("\n")
@@ -58,13 +69,13 @@ def obtener_montos_movimiento(movimiento):
     return monto,saldo
 
 def extraer_montos_saldos(movimientos):
-    movimientos["Monto"] = 0
-    movimientos["Saldo"] = 0
+    movimientos["Monto"] = ""
+    movimientos["Saldo"] = ""
     for index,fila in movimientos.iterrows():
         movimiento =fila["movimiento"]
         monto,saldo = obtener_montos_movimiento(movimiento)
-        movimientos.loc[index,"Monto"] = monto
-        movimientos.loc[index,"Saldo"] = saldo
+        movimientos.loc[index,"Monto"] = str(monto)
+        movimientos.loc[index,"Saldo"] = str(saldo)
     return movimientos
 
 def unificar_movimiento(df):
@@ -92,14 +103,15 @@ def extraer_movimientos_estado_de_cuenta(estado):
     
 
 def identificar_cargo_abono(df):
-    df["Cargos"] = 0
-    df["Abonos"] = 0
+    df["Cargos"] = ""
+    df["Abonos"] = ""
     for i in range(1,df.shape[0]):
         saldo_anterior = df.iloc[i-1,3].replace(",","")
         saldo_actual = float(df.iloc[i,3].replace(",",""))
         monto = df.iloc[i,2].replace(",","")
         saldo_ideal = float(saldo_anterior) + float(monto)
         saldo_ideal = round(saldo_ideal,2)
+        monto = str(monto)
         if saldo_actual != saldo_ideal:
             df.loc[i,"Cargos"] = monto
         else:
@@ -252,3 +264,9 @@ def analisis_tipo_movimiento(df):
         else:
             df.loc[index,"TipoMovimiento"] = "OTRO"
     return df
+
+if __name__ == "__main__":
+    ruta_archivo = "/home/abelsr/Proyects/OCR-General/Scraping_Bancos_Mx/notebooks/2033_033620303_1_20260105114600.pdf"
+    tabla = Scrap_Estado(ruta_archivo)
+    print(tabla)
+    # breakpoint()

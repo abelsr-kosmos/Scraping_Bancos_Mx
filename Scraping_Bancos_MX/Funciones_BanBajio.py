@@ -361,12 +361,25 @@ def analisis_tipo_movimiento(df):
     return df
 
 if __name__ == "__main__":
+    import time
     from rich.console import Console
     from rich.table import Table
     
     console = Console()
     ruta_archivo = "/home/abelsr/Proyects/OCR-General/Scraping_Bancos_Mx/notebooks/2033_033620303_1_20260105114600.pdf"
+    t0 = time.perf_counter_ns()
     tabla = Scrap_Estado(ruta_archivo)
+    t1 = time.perf_counter_ns()
+    console.print(f"Tiempo de procesamiento: {(t1 - t0) / 1e9:.2f} segundos")
+    # Resumen de depositos y retiros (totales)
+    depositos = tabla['deposito'].sum()
+    retiros = tabla['retiro'].sum()
+    console.print(f"Total de depósitos: ${depositos}")
+    console.print(f"Total de retiros: ${retiros}")
+    saldo_inicial = tabla['saldo'].iloc[0]
+    saldo_final = tabla['saldo'].iloc[-1]
+    console.print(f"Saldo inicial: ${saldo_inicial}")
+    console.print(f"Saldo final: ${saldo_final}")
     tabla['descripcion'] = tabla['descripcion'].astype(str).str.slice(0, 120) + "..."
     
     # Convert DataFrame to Rich Table
@@ -380,12 +393,3 @@ if __name__ == "__main__":
     console.print(rich_table)
     
     
-    # Resumen de depositos y retiros (totales)
-    depositos = tabla['deposito'].sum()
-    retiros = tabla['retiro'].sum()
-    console.print(f"Total de depósitos: ${depositos}")
-    console.print(f"Total de retiros: ${retiros}")
-    saldo_inicial = tabla['saldo'].iloc[0]
-    saldo_final = tabla['saldo'].iloc[-1]
-    console.print(f"Saldo inicial: ${saldo_inicial}")
-    console.print(f"Saldo final: ${saldo_final}")

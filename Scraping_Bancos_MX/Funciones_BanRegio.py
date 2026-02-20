@@ -14,6 +14,7 @@ RE_RFC = re.compile(r"RFC")
 RE_PAGE = re.compile(r"Page")
 RE_FECHA = re.compile(r"\d{2}")
 RE_NOSPACE = re.compile(r"\s+")
+TABLE_SENTINEL = "DIACONCEPTOCARGOSABONOSSALDO"
 
 def Scrap_Estado(ruta_archivo):
     with pdfplumber.open(ruta_archivo) as estado:
@@ -131,12 +132,42 @@ def analisis_tipo_movimiento(df):
 
 def analizar_estados(estado):
     movimientos_paginas = []
+    en_tabla = False
+
     for pagina in estado.pages:
-        texto_raw = pagina.extract_text_simple() or ""
-        texto = RE_NOSPACE.sub("", texto_raw)
-        if "DIACONCEPTOCARGOSABONOSSALDO" in texto and "GráficoTransaccional" not in texto and "REGIOCUENTA" not in texto:
-            movimientos = extraer_movimientos_pagina(pagina.chars, texto)
+        caracteres = pagina.chars
+        if not caracteres:
+            if en_tabla:
+                break
+            continue
+
+        texto = normalizar_texto_chars(caracteres)
+
+        contiene_tabla = (
+            TABLE_SENTINEL in texto
+            and "GráficoTransaccional" not in texto
+            and "REGIOCUENTA" not in texto
+        )
+
+        if not contiene_tabla:
+            texto_fallback = RE_NOSPACE.sub("", pagina.extract_text_simple() or "")
+            contiene_tabla = (
+                TABLE_SENTINEL in texto_fallback
+                and "GráficoTransaccional" not in texto_fallback
+                and "REGIOCUENTA" not in texto_fallback
+            )
+            if contiene_tabla:
+                texto = texto_fallback
+
+        if contiene_tabla:
+            en_tabla = True
+            movimientos = extraer_movimientos_pagina(caracteres, texto)
             movimientos_paginas.append(movimientos)
+            continue
+
+        if en_tabla:
+            break
+
     if movimientos_paginas:
         df = pd.concat(movimientos_paginas, ignore_index=True)
     else:
@@ -146,6 +177,12 @@ def analizar_estados(estado):
     df = incluir_movimientos(df)
     df = unificar_tabla(df)
     return df
+
+
+def normalizar_texto_chars(caracteres):
+    ordenados = sorted(caracteres, key=lambda c: (round(c.get("top", 0.0), 1), c.get("x0", c.get("x1", 0.0))))
+    texto = "".join(c.get("text", "") for c in ordenados)
+    return RE_NOSPACE.sub("", texto)
 
 
 

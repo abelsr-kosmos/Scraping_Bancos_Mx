@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "Scraping-Bancos-MX"
+version = "0.1.0"
+description = "Librería para extraer datos de movimientos de los estados de cuenta de bancos Mexicanos"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+authors = [
+    {name = "Abel Santillan Rodriguez", email = "abelsantillanrdz@gmail.com"}
+]
+keywords = ["pdf", "scraping", "bank", "statement", "extractor", "mexico", "bancos"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Office/Business :: Financial",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = [
+    "pdfplumber>=0.10.0",
+    "pandas>=1.5.0",
+    "numpy>=1.21.0"
+]
+
+[project.urls]
+Homepage = "https://github.com/abelsr-kosmos/Scraping_Bancos_Mx"
+Repository = "https://github.com/abelsr-kosmos/Scraping_Bancos_Mx"
+Issues = "https://github.com/abelsr-kosmos/Scraping_Bancos_Mx/issues"
+
+[tool.setuptools.packages.find]
+exclude = ["tests", "notebooks", "benchmark*"]

@@ -2,10 +2,21 @@ import re
 
 import pdfplumber
 import pandas as pd
+import numpy as np
+
+RE_SPEI = re.compile(r"SPEI")
+RE_TRA_INT = re.compile(r"TRA|INT")
+RE_IVA = re.compile(r"IVA")
+RE_COMISION = re.compile(r"COMISION", re.IGNORECASE)
+RE_COM = re.compile(r"COM\.")
+RE_TRASPASO = re.compile(r"TRASPASO")
+RE_RFC = re.compile(r"RFC")
+RE_PAGE = re.compile(r"Page")
+RE_FECHA = re.compile(r"\d{2}")
 
 def Scrap_Estado(ruta_archivo):
-    estado = pdfplumber.open(ruta_archivo)
-    tabla = analizar_estados(estado)
+    with pdfplumber.open(ruta_archivo) as estado:
+        tabla = analizar_estados(estado)
     tabla = analisis_movimientos(tabla)
     tabla = formatear_tabla(tabla)
     return tabla
@@ -25,6 +36,10 @@ def formatear_tabla(df):
     df = df.rename(columns={"Saldo": "saldo"})
     # Quita | a la descripcion
     df["descripcion"] = df["descripcion"].str.replace("|", " ", regex=False)
+    # Convert deposito, retiro y saldo a float, manejando comas y signos
+    df["deposito"] = df["deposito"].apply(lambda x: float(str(x).replace(",", "").replace("$", "").strip()) if pd.notna(x) and str(x).strip() != "" else None)
+    df["retiro"] = df["retiro"].apply(lambda x: float(str(x).replace(",", "").replace("$", "").strip()) if pd.notna(x) and str(x).strip() != "" else None)
+    df["saldo"] = df["saldo"].apply(lambda x: float(str(x).replace(",", "").replace("$", "").strip()) if pd.notna(x) and str(x).strip() != "" else None)
     return df[["fecha", "descripcion", "deposito", "retiro", "saldo"]]
 
 def analisis_movimientos(df):
@@ -37,90 +52,87 @@ def analisis_movimientos(df):
     return df
 
 def normalizar_tabla(df):
-    df = df.drop('Movimiento', axis=1)
+    df = df.drop('Movimiento', axis=1, errors="ignore")
     return df
 
 
 def analisis_concepto(df):
-    df["ConceptoMovimiento"] = ""
-    for index,row in df.iterrows():
-        concepto = "-"
-        if re.search("SPEI",row["Concepto"]) and (re.search("TRA",row["Concepto"]) or re.search("INT",row["Concepto"]) ) and not re.search("IVA",row["Concepto"]) and not re.search("COMISION",row["Concepto"],re.IGNORECASE):
-            concepto = row["Concepto"].split(",")[-1]
-
-        try:
-            concepto = concepto.replace("|","")
-        except:
-            pass
-        df.loc[index,"ConceptoMovimiento"] = concepto
+    concepto = df["Concepto"].fillna("")
+    mask_spei = (
+        concepto.str.contains(RE_SPEI)
+        & concepto.str.contains(RE_TRA_INT)
+        & ~concepto.str.contains(RE_IVA)
+        & ~concepto.str.contains(RE_COMISION)
+    )
+    df["ConceptoMovimiento"] = "-"
+    df.loc[mask_spei, "ConceptoMovimiento"] = concepto[mask_spei].str.rsplit(",", n=1).str[-1]
+    df["ConceptoMovimiento"] = df["ConceptoMovimiento"].str.replace("|", "", regex=False)
     return df
 
 def analisis_institucion_contraparte(df):
-    df["InstitucionContraparte"] = ""
-    for index,row in df.iterrows():
-        banco = "Sin Contraparte"
-        if re.search("SPEI",row["Concepto"]) and (re.search("TRA",row["Concepto"]) or re.search("INT",row["Concepto"]) ) and not re.search("IVA",row["Concepto"]) and not re.search("COMISION",row["Concepto"],re.IGNORECASE):
-            concepto = row["Concepto"].split("SPEI,")[1]
-            banco = concepto.split(",")[0]
-        elif re.search("TRASPASO",row["Concepto"]):
-            banco = "BANREGIO"
-        try:
-            banco = banco.replace("|","")
-        except:
-            pass
-        df.loc[index,"InstitucionContraparte"] = banco
+    concepto = df["Concepto"].fillna("")
+    mask_spei = (
+        concepto.str.contains(RE_SPEI)
+        & concepto.str.contains(RE_TRA_INT)
+        & ~concepto.str.contains(RE_IVA)
+        & ~concepto.str.contains(RE_COMISION)
+    )
+    mask_traspaso = concepto.str.contains(RE_TRASPASO)
+
+    df["InstitucionContraparte"] = "Sin Contraparte"
+    df.loc[mask_spei, "InstitucionContraparte"] = concepto[mask_spei].str.extract(r"SPEI,([^,]+)")[0].fillna("Sin Contraparte")
+    df.loc[mask_traspaso, "InstitucionContraparte"] = "BANREGIO"
+    df["InstitucionContraparte"] = df["InstitucionContraparte"].str.replace("|", "", regex=False)
 
     return df
 
 
 def analisis_contraparte(df):
-    df["Contraparte"] = ""
-    for index,row in df.iterrows():
-        concepto= "-"
-        if re.search("SPEI",row["Concepto"]) and (re.search("TRA",row["Concepto"]) or re.search("INT",row["Concepto"]) )and not re.search("IVA",row["Concepto"]) and not re.search("COMISION",row["Concepto"],re.IGNORECASE):
-            concepto = row["Concepto"].split(",")[3]
-        elif re.search("TRASPASO",row["Concepto"]) and re.search("RFC",row["Concepto"]):
-            concepto = row["Concepto"].split(",")[1]
+    concepto = df["Concepto"].fillna("")
+    mask_spei = (
+        concepto.str.contains(RE_SPEI)
+        & concepto.str.contains(RE_TRA_INT)
+        & ~concepto.str.contains(RE_IVA)
+        & ~concepto.str.contains(RE_COMISION)
+    )
+    mask_traspaso_rfc = concepto.str.contains(RE_TRASPASO) & concepto.str.contains(RE_RFC)
 
-        try:
-            concepto = concepto.replace("|","")
-        except:
-            pass
-        df.loc[index,"Contraparte"] = concepto
+    df["Contraparte"] = "-"
+    df.loc[mask_spei, "Contraparte"] = concepto[mask_spei].str.split(",").str[3].fillna("-")
+    df.loc[mask_traspaso_rfc, "Contraparte"] = concepto[mask_traspaso_rfc].str.split(",").str[1].fillna("-")
+    df["Contraparte"] = df["Contraparte"].str.replace("|", "", regex=False)
 
     return df
 
 def analisis_tipo_movimiento(df):
-    df["TipoMovimiento"] = ""
-    for index,row in df.iterrows():
-        conceptos = row["Concepto"].split("|")
-        concepto = conceptos[1]
-        if re.search("SPEI",concepto) and not re.search("IVA",concepto) and not re.search("COM.",concepto):
-            df.loc[index,"TipoMovimiento"] = "SPEI"
-        elif re.search("TRA",concepto) and  re.search("PAGO",concepto,re.IGNORECASE) and not re.search("COM.",concepto):
-            df.loc[index,"TipoMovimiento"] = "PAGO"
-        elif re.search("omision",concepto) and not re.search("IVA",concepto):
-            df.loc[index,"TipoMovimiento"] = "COMISION"
-        elif re.search("IVA",concepto):
-            df.loc[index,"TipoMovimiento"] = "IVACOMISION"
-        elif re.search("RFC",concepto):
-            df.loc[index,"TipoMovimiento"] = "COMPRA"
-        else:
-            df.loc[index,"TipoMovimiento"] = "OTRO"
+    concepto = df["Concepto"].fillna("").str.split("|", n=2).str[1].fillna(df["Concepto"].fillna(""))
+
+    mask_spei = concepto.str.contains(RE_SPEI) & ~concepto.str.contains(RE_IVA) & ~concepto.str.contains(RE_COM)
+    mask_pago = concepto.str.contains("TRA") & concepto.str.contains("PAGO", case=False) & ~concepto.str.contains(RE_COM)
+    mask_comision = concepto.str.contains("omision", case=False) & ~concepto.str.contains(RE_IVA)
+    mask_iva = concepto.str.contains(RE_IVA)
+    mask_compra = concepto.str.contains(RE_RFC)
+
+    df["TipoMovimiento"] = "OTRO"
+    df.loc[mask_spei, "TipoMovimiento"] = "SPEI"
+    df.loc[mask_pago, "TipoMovimiento"] = "PAGO"
+    df.loc[mask_comision, "TipoMovimiento"] = "COMISION"
+    df.loc[mask_iva, "TipoMovimiento"] = "IVACOMISION"
+    df.loc[mask_compra, "TipoMovimiento"] = "COMPRA"
     return df
 
 def analizar_estados(estado):
-    df = pd.DataFrame()
-    anios = []
-    contador = 0
+    movimientos_paginas = []
     for pagina in estado.pages:
-        texto = pagina.extract_text()
-        texto = texto.replace("\n", "")
-        texto = texto.replace(" ", "")
+        texto = pagina.extract_text() or ""
+        texto = texto.replace("\n", "").replace(" ", "")
         if re.search("DIACONCEPTOCARGOSABONOSSALDO", texto) and not re.search("GráficoTransaccional", texto) and not re.search("REGIOCUENTA", texto):
                 movimientos = extraer_movimientos_pagina(pagina,texto)
-                df = pd.concat([df, pd.DataFrame(movimientos)])
-        contador += 1
+                movimientos_paginas.append(movimientos)
+    if movimientos_paginas:
+        df = pd.concat(movimientos_paginas, ignore_index=True)
+    else:
+        df = pd.DataFrame(columns=["Fecha", "Concepto", "Origen", "Deposito", "Retiro", "Saldo", "Top"])
     df = df.reset_index(drop=True)
     df = unificar_variaciones_altura(df)
     df = incluir_movimientos(df)
@@ -132,13 +144,18 @@ def analizar_estados(estado):
     
 
 def unificar_variaciones_altura(df):
-    for index, row in df.iterrows():
-        if row["Fecha"] != "" and row["Concepto"] == "":
-            df.loc[index+1, "Fecha"] = df.loc[index, "Fecha"]
-            df.loc[index+1, "Deposito"] = df.loc[index, "Deposito"]
-            df.loc[index+1, "Retiro"] = df.loc[index, "Retiro"]
-            df.loc[index+1, "Saldo"] = df.loc[index, "Saldo"]
-            df.drop(index, inplace=True)
+    if df.empty:
+        return df
+
+    mask = (df["Fecha"] != "") & (df["Concepto"] == "")
+    idx = df.index[mask]
+    if len(idx) == 0:
+        return df
+
+    idx_validos = idx[idx + 1 < len(df)]
+    for col in ["Fecha", "Deposito", "Retiro", "Saldo"]:
+        df.loc[idx_validos + 1, col] = df.loc[idx_validos, col].to_numpy()
+    df = df.drop(idx)
 
     return df
 
@@ -152,19 +169,26 @@ def unificar_movimiento(df):
     return moviemiento
 
 def unificar_tabla(df):
-    movimientos_unificados = []
-    for movimiento in df["Movimiento"].unique():
-        movimientos_unificados.append(unificar_movimiento(df[df["Movimiento"]==movimiento]))
-    return pd.DataFrame(movimientos_unificados)
+    if df.empty:
+        return pd.DataFrame(columns=["Fecha", "Concepto", "Origen", "Deposito", "Retiro", "Saldo", "Movimiento"])
+
+    tabla = (
+        df.groupby("Movimiento", sort=False)
+        .agg(
+            Fecha=("Fecha", "first"),
+            Concepto=("Concepto", lambda s: "|" + "|".join(s.astype(str))),
+            Origen=("Origen", "first"),
+            Deposito=("Deposito", "first"),
+            Retiro=("Retiro", "first"),
+            Saldo=("Saldo", "first"),
+        )
+        .reset_index()
+    )
+    return tabla
 
 def incluir_movimientos(df):
     df = df.reset_index(drop=True)
-    df["Movimiento"] = 0
-    contador_movimiento = 0
-    for index, fila in df.iterrows():
-        if  re.match(r"\d{2}", fila["Fecha"]):
-            contador_movimiento += 1 
-        df.loc[index,"Movimiento"] = contador_movimiento
+    df["Movimiento"] = df["Fecha"].astype(str).str.match(RE_FECHA).cumsum().astype(int)
     return df
 
 
@@ -179,34 +203,39 @@ def extraer_movimientos_pagina(pagina,texto):
 def incluir_anio_mes(filas,texto):
     anios = {"ENERO":1,"FEBRERO":2,"MARZO":3,"ABRIL":4,"MAYO":5,"JUNIO":6,"JULIO":7,"AGOSTO":8,"SEPTIEMBRE":9,"OCTUBRE":10,"NOVIEMBRE":11,"DICIEMBRE":12}
     periodo = re.search(r"del\d{2}al\d{2}de\w+\d{4}",texto)
+    if not periodo:
+        return
     periodo = periodo.group(0).replace("del","")
     periodo = periodo.split("de")[1]
     anio = periodo[-4:]
     mes = periodo[:-4]
     mes = anios[mes.upper()]
-    for index, fila in filas.iterrows():
-        if  re.match(r"\d{2}", fila["Fecha"]):
-            filas.loc[index,"Fecha"] = fila["Fecha"] + "/" + str(mes) + "/" + str(anio)
+    mask_fechas = filas["Fecha"].astype(str).str.match(RE_FECHA)
+    filas.loc[mask_fechas, "Fecha"] = filas.loc[mask_fechas, "Fecha"] + "/" + str(mes) + "/" + str(anio)
 
 
 
 
 def agrupar_columnas(caracteres):
-    columnas = []
-    for caracter in caracteres:
-        coordenada = (caracter["x1"])
-        if coordenada <= 50 and coordenada >= 34:
-            columnas.append({"Caracter": caracter["text"], "Top": round(caracter["top"],4),"X":caracter["x1"],"Columna": 0})
-        elif coordenada <= 341  and coordenada > 50:
-            columnas.append({"Caracter": caracter["text"], "Top": round(caracter["top"],4),"X":caracter["x1"],"Columna": 1})
-        elif coordenada <= 420  and coordenada > 341:
-            columnas.append({"Caracter": caracter["text"], "Top": round(caracter["top"],4),"X":caracter["x1"],"Columna": 2})
-        elif coordenada <= 500  and coordenada > 420:
-            columnas.append({"Caracter": caracter["text"], "Top": round(caracter["top"],4),"X":caracter["x1"],"Columna": 3})
-        elif coordenada <= 577  and coordenada > 500:
-            columnas.append({"Caracter": caracter["text"], "Top": round(caracter["top"],4),"X":caracter["x1"],"Columna": 4})
-    columnas = pd.DataFrame(columnas)
-    return columnas
+    if not caracteres:
+        return pd.DataFrame(columns=["Caracter", "Top", "X", "Columna"])
+
+    columnas = pd.DataFrame(caracteres)[["text", "top", "x1"]].rename(columns={"text": "Caracter", "top": "Top", "x1": "X"})
+    columnas["Top"] = columnas["Top"].round(4)
+
+    x = columnas["X"]
+    columnas["Columna"] = np.select(
+        [
+            (x >= 34) & (x <= 50),
+            (x > 50) & (x <= 341),
+            (x > 341) & (x <= 420),
+            (x > 420) & (x <= 500),
+            (x > 500) & (x <= 577),
+        ],
+        [0, 1, 2, 3, 4],
+        default=-1,
+    )
+    return columnas[columnas["Columna"] >= 0]
 
 def unificar_columna(top):
     top = top.sort_values(by=["X"])
@@ -230,25 +259,39 @@ def unificar_columna(top):
     return fila
 
 def unificar_columnas(columnas):
-    tops = columnas["Top"].unique()
-    filas = []
-    for top in tops:
-        top = columnas[columnas["Top"] == top]
-        fila = unificar_columna(top)
-        filas.append(fila)
-    filas = pd.DataFrame(filas)
-    
-    filas = filas.sort_values(by=["Top"])
-    return filas
+    if columnas.empty:
+        return pd.DataFrame(columns=["Fecha", "Concepto", "Origen", "Deposito", "Retiro", "Saldo", "Top"])
+
+    col_ordenadas = columnas.sort_values(["Top", "X"])
+    pivot = col_ordenadas.groupby(["Top", "Columna"], sort=False)["Caracter"].agg("".join).unstack(fill_value="")
+
+    filas = pd.DataFrame(
+        {
+            "Fecha": pivot.get(0, ""),
+            "Concepto": pivot.get(1, ""),
+            "Origen": "",
+            "Deposito": pivot.get(2, ""),
+            "Retiro": pivot.get(3, ""),
+            "Saldo": pivot.get(4, ""),
+            "Top": pivot.index,
+        }
+    ).reset_index(drop=True)
+    return filas.sort_values(by=["Top"])
 
 def eliminar_movimientos_no_deseados(filas):
     filas = filas.reset_index(drop=True)
-    for index,row in filas.iterrows():
-        if index > 0:
-            if row["Fecha"] == "DIA":
-                filas = filas[filas["Top"] > row["Top"]]
-            elif  re.search("Page" ,row["Saldo"]):
-                filas = filas[filas["Top"] < row["Top"]]
+    if filas.empty:
+        return filas
+
+    mask_dia = (filas.index > 0) & (filas["Fecha"] == "DIA")
+    if mask_dia.any():
+        top_inicio = filas.loc[mask_dia, "Top"].iloc[0]
+        filas = filas[filas["Top"] > top_inicio]
+
+    mask_page = filas["Saldo"].astype(str).str.contains(RE_PAGE)
+    if mask_page.any():
+        top_fin = filas.loc[mask_page, "Top"].iloc[0]
+        filas = filas[filas["Top"] < top_fin]
 
 
     return filas
@@ -272,3 +315,7 @@ if __name__ == "__main__":
     ps.print_stats(20)  # Top 20 functions
     print(s.getvalue())
     
+    # To ensure results
+    print(df.head())
+    print(f"Total depositos: {df['deposito'].notna().sum()}, Total retiros: {df['retiro'].notna().sum()}")
+    print(f"Suma depositos: {df['deposito'].sum()}, Suma retiros: {df['retiro'].sum()}")

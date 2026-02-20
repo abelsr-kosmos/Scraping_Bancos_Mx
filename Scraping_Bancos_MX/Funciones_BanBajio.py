@@ -266,7 +266,20 @@ def analisis_tipo_movimiento(df):
     return df
 
 if __name__ == "__main__":
+    from rich.console import Console
+    from rich.table import Table
+    
+    console = Console()
     ruta_archivo = "/home/abelsr/Proyects/OCR-General/Scraping_Bancos_Mx/notebooks/2033_033620303_1_20260105114600.pdf"
     tabla = Scrap_Estado(ruta_archivo)
-    print(tabla)
-    # breakpoint()
+    tabla['descripcion'] = tabla['descripcion'][:10] + "..."
+    
+    # Convert DataFrame to Rich Table
+    rich_table = Table(title="Estado de Cuenta")
+    for column in tabla.columns:
+        rich_table.add_column(column)
+    
+    for _, row in tabla.iterrows():
+        rich_table.add_row(*[str(val) for val in row])
+    
+    console.print(rich_table)

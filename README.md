@@ -30,10 +30,10 @@
 
 ## Installation
 
-### From PyPI (recommended)
+### From git URL (only supported for now until published on PyPI)
 
 ```bash
-pip install Scraping-Bancos-MX
+pip install git+https://github.com/abelsr-kosmos/Scraping_Bancos_Mx.git
 ```
 
 ### From Source

@@ -1,12 +1,31 @@
-import pandas as pd
 import re
+
 import pdfplumber
+import pandas as pd
 
 def Scrap_Estado(ruta_archivo):
     estado = pdfplumber.open(ruta_archivo)
     tabla = analizar_estados(estado)
-    tabla2 = analisis_movimientos(tabla)
-    return tabla2
+    tabla = analisis_movimientos(tabla)
+    tabla = formatear_tabla(tabla)
+    return tabla
+    
+
+def formatear_tabla(df):
+    # Normalizamos solo para tener: ['fecha', 'descripcion', 'deposito', 'retiro', 'saldo']
+    # Concepto -> descripcion
+    df = df.rename(columns={"Concepto": "descripcion"})
+    # Fecha -> fecha
+    df = df.rename(columns={"Fecha": "fecha"})
+    # Deposito -> deposito
+    df = df.rename(columns={"Deposito": "deposito"})
+    # Retiro -> retiro
+    df = df.rename(columns={"Retiro": "retiro"})
+    # Saldo -> saldo
+    df = df.rename(columns={"Saldo": "saldo"})
+    # Quita | a la descripcion
+    df["descripcion"] = df["descripcion"].str.replace("|", " ", regex=False)
+    return df[["fecha", "descripcion", "deposito", "retiro", "saldo"]]
 
 def analisis_movimientos(df):
     df = df.copy()
@@ -233,3 +252,23 @@ def eliminar_movimientos_no_deseados(filas):
 
 
     return filas
+
+
+if __name__ == "__main__":
+    import cProfile
+    import pstats
+    from io import StringIO
+    
+    pr = cProfile.Profile()
+    pr.enable()
+    
+    ruta_archivo = "/home/abelsr/Proyects/OCR-General/Scraping_Bancos_Mx/notebooks/gettablefileurl (59).pdf"
+    df = Scrap_Estado(ruta_archivo)
+    df["descripcion"] = df["descripcion"].str[:20]
+    
+    pr.disable()
+    s = StringIO()
+    ps = pstats.Stats(pr, stream=s).sort_stats('cumulative')
+    ps.print_stats(20)  # Top 20 functions
+    print(s.getvalue())
+    

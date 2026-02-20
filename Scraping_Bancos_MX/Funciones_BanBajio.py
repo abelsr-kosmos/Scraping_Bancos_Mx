@@ -23,6 +23,7 @@ def formatear_tabla(df):
         .fillna("-")
         .astype(str)
         .replace({"nan": "-", "None": "-"})
+        .str.replace(r"\$\s*-?[\d,]+(?:\.\d{2})?", " ", regex=True)
         .str.replace("|", " ", regex=False)
         .str.replace(r"\s+", " ", regex=True)
         .str.strip()

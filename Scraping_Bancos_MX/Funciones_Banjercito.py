@@ -1,5 +1,5 @@
 import re
-from typing import List, Tuple, Optional
+from typing import Tuple, Optional
 
 import pdfplumber
 import pandas as pd
@@ -20,16 +20,44 @@ COL_BOUNDS = {
     "saldo":      (516, 590),
 }
 
+HAS_NUMERIC_RE = re.compile(r"^[\d,.]+$")
+
 
 # ---------------------------------------------------------------------------
 # Funciones auxiliares
 # ---------------------------------------------------------------------------
 
-def _get_col_text(line_chars: list, x_min: float, x_max: float) -> str:
-    """Extrae texto de los caracteres cuyo x0 cae en [x_min, x_max)."""
-    chars = [c for c in line_chars if c["x0"] >= x_min and c["x0"] < x_max]
-    chars.sort(key=lambda c: c["x0"])
-    return "".join(c["text"] for c in chars).strip()
+def _split_line_cols(line_chars: list) -> dict:
+    """Divide una línea en columnas con una sola pasada por los caracteres."""
+    values = {key: [] for key in COL_BOUNDS}
+
+    for c in line_chars:
+        x0 = c["x0"]
+        if x0 < COL_BOUNDS["dia_oper"][0] or x0 >= COL_BOUNDS["saldo"][1]:
+            continue
+
+        if x0 < COL_BOUNDS["dia_oper"][1]:
+            values["dia_oper"].append(c["text"])
+        elif x0 < COL_BOUNDS["dia_regis"][1]:
+            values["dia_regis"].append(c["text"])
+        elif x0 < COL_BOUNDS["concepto"][1]:
+            values["concepto"].append(c["text"])
+        elif x0 < COL_BOUNDS["usuario"][1]:
+            values["usuario"].append(c["text"])
+        elif x0 < COL_BOUNDS["referencia"][1]:
+            values["referencia"].append(c["text"])
+        elif x0 < COL_BOUNDS["cargos"][1]:
+            values["cargos"].append(c["text"])
+        elif x0 < COL_BOUNDS["abonos"][1]:
+            values["abonos"].append(c["text"])
+        else:
+            values["saldo"].append(c["text"])
+
+    return {k: "".join(v).strip() for k, v in values.items()}
+
+
+def _line_text(line_chars: list) -> str:
+    return "".join(c["text"] for c in line_chars).strip()
 
 
 def _group_lines(chars: list, tol: float = 1.5) -> list:
@@ -52,15 +80,21 @@ def _group_lines(chars: list, tol: float = 1.5) -> list:
     return lines
 
 
-def _find_header_bottom(page) -> Optional[float]:
-    """Encuentra el bottom del header de la tabla usando los rectángulos."""
-    rects = page.rects
-    if not rects:
-        return None
-    header_rects = [r for r in rects if r["x0"] < 60 and r["x1"] > 80]
-    if header_rects:
-        return max(r["bottom"] for r in header_rects)
-    return None
+def _find_data_start_index(lines: list) -> int:
+    """Encuentra el índice donde inicia la data de movimientos."""
+    header_idx = -1
+
+    for idx, (_top, line_chars) in enumerate(lines):
+        text = _line_text(line_chars).upper()
+        if "DETALLE DE MOVIMIENTOS" in text:
+            header_idx = idx
+            continue
+
+        if "CONCEPTO" in text and ("DÍA" in text or "DIA" in text):
+            if header_idx == -1 or idx >= header_idx:
+                return idx + 1
+
+    return -1
 
 
 def _parse_monto(val: str) -> Optional[float]:
@@ -115,29 +149,30 @@ def Scrap_Estado(ruta_archivo: str) -> pd.DataFrame:
     all_movements: list = []
 
     with pdfplumber.open(ruta_archivo) as pdf:
-        anio, mes_corte = _extraer_anio_mes(pdf)
+        anio, _mes_corte = _extraer_anio_mes(pdf)
 
         for page in pdf.pages:
-            header_bottom = _find_header_bottom(page)
-            if header_bottom is None:
-                continue
-
-            chars = [c for c in page.chars if c["top"] >= header_bottom - 2]
+            chars = page.chars
             if not chars:
                 continue
 
             lines = _group_lines(chars)
+            data_start = _find_data_start_index(lines)
+            if data_start == -1:
+                continue
+
             current_movement = None
 
-            for _top, line_chars in lines:
-                dia_oper   = _get_col_text(line_chars, *COL_BOUNDS["dia_oper"])
-                dia_regis  = _get_col_text(line_chars, *COL_BOUNDS["dia_regis"])
-                concepto   = _get_col_text(line_chars, *COL_BOUNDS["concepto"])
-                usuario    = _get_col_text(line_chars, *COL_BOUNDS["usuario"])
-                referencia = _get_col_text(line_chars, *COL_BOUNDS["referencia"])
-                cargos     = _get_col_text(line_chars, *COL_BOUNDS["cargos"])
-                abonos     = _get_col_text(line_chars, *COL_BOUNDS["abonos"])
-                saldo      = _get_col_text(line_chars, *COL_BOUNDS["saldo"])
+            for _top, line_chars in lines[data_start:]:
+                cols = _split_line_cols(line_chars)
+                dia_oper = cols["dia_oper"]
+                dia_regis = cols["dia_regis"]
+                concepto = cols["concepto"]
+                usuario = cols["usuario"]
+                referencia = cols["referencia"]
+                cargos = cols["cargos"]
+                abonos = cols["abonos"]
+                saldo = cols["saldo"]
 
                 # Saltar encabezado de columnas
                 if "Concepto" in concepto or "Día" in dia_oper:
@@ -155,7 +190,7 @@ def Scrap_Estado(ruta_archivo: str) -> pd.DataFrame:
                 # Detectar nueva fila de movimiento:
                 # 1) Tiene saldo numérico, O
                 # 2) Tiene dia_oper + (cargos o abonos) → movimiento en borde de página sin saldo
-                has_saldo = bool(saldo and re.match(r"[\d,.]+$", saldo))
+                has_saldo = bool(saldo and HAS_NUMERIC_RE.match(saldo))
                 has_monto = bool(cargos or abonos)
                 is_new_movement = has_saldo or (bool(dia_oper) and has_monto and not has_saldo)
 
@@ -217,21 +252,3 @@ def Scrap_Estado(ruta_archivo: str) -> pd.DataFrame:
     df = df[~((df["retiros"].isna() | (df["retiros"] == 0)) & (df["depositos"].isna() | (df["depositos"] == 0)))]
 
     return df[["fecha", "descripcion", "retiros", "depositos", "saldo"]].copy()
-
-
-if __name__ == "__main__":
-    
-    # Ejemplo de uso
-    pdf_path = "/home/abelsr/Proyects/OCR-General/Scraping_Bancos_Mx/notebooks/19991988_15122025_151027.pdf"
-    df_movimientos = Scrap_Estado(pdf_path)
-    
-    console = Console()
-    table = Table(title="Movimientos Banjercito")
-    
-    for column in df_movimientos.columns:
-        table.add_column(column, style="cyan")
-    
-    for _, row in df_movimientos.iterrows():
-        table.add_row(*[str(v) for v in row.values])
-    
-    console.print(table)

@@ -1,60 +1,168 @@
-# Scraping Datos Bancarios Mx
+# Scraping Bancos MX
 
-Esta libreria se hizo con el objetivo de facilitar la extracción de datos de los estados de cuenta de la mayoría de los bancos mexicanos.
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.9%2B-blue?style=for-the-badge&logo=python&logoColor=white" alt="Python 3.9+">
+  <img src="https://img.shields.io/badge/pypi-v0.1.0-brightgreen?style=for-the-badge&logo=pypi&logoColor=white" alt="PyPI version">
+  <img src="https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge" alt="License: MIT">
+  <img src="https://img.shields.io/badge/Made%20with-❤️-red?style=for-the-badge" alt="Made with love">
+</p>
 
+<p align="center">
+  <img src="https://img.shields.io/badge/pdfplumber-✓-orange?style=flat-square" alt="pdfplumber">
+  <img src="https://img.shields.io/badge/pandas-✓-purple?style=flat-square" alt="pandas">
+  <img src="https://img.shields.io/badge/numpy-✓-lightblue?style=flat-square" alt="numpy">
+</p>
 
-# Funcionamiento
-Para obtener los datos bancarios, primero tenemos que importar las funciones del banco que necesitamos. Todos los diferentes bancos tienen el mismo nombre para el análisis del estado. Únicamente tendrás que llamar a la función y enviar como parámetro una dirección donde esté el archivo. El proceso nos devolverá un DataFrame de Pandas con los datos extraídos.
-Ejemplo:
+---
 
-    from Funciones_BBVA import Scrap_Estado
-    
-    estado_extraido = Scrap_Estado("ruta/ejemplo/estado.pdf")
+<p align="center">
+  <b>A Python library to extract transaction data from PDF bank statements of major Mexican banks</b>
+</p>
 
-La estructura del Dataframe recibidó es la siguiente:
+---
 
-|FECHA|CONCEPTO|ORIGEN|DEPOSITO|RETIRO|SALDO|TIPO MOVIMIENTO|CONTRAPARTE|INSTITUCION CONTRAPARTE| CONCEPTO MOVIMIENTO 
-|--|--|--|--|--|--|--|--|--|--|
+## Features
 
-Definición estructura:
-Fecha : dia/mes/año
-Concepto : Descripción completa del movimiento
-Origen* : Referencia del movimiento
-Deposito : Valor del Depósito  
-Retiro : Valor del Retiro
-Saldo* : Valor del Saldo despues de la operación
-Tipo Movimiento : Puede tomar los siguientes valores
+- Extract transactions from PDF bank statements
+- Supports 16 Mexican banks
+- Returns standardized pandas DataFrames
+- Easy-to-use API with consistent interface per bank
 
- - SPEI
- - PAGO
- - COMPRA
- - COMISION
- - IVACOMISION
- - OTRO
-Contraparte* : Es el destinatario o remitente del movimiento
-Institucion Contraparte* : Es la institucón Bancaria a la cual pertence la contraparte
+## Installation
 
-Concepto*: Es el concepto de la operación
- 
- ** Estos campos pueden existir o no dependiendo el Banco y el tipo de movimiento
+### From PyPI (recommended)
 
-# Importante
+```bash
+pip install Scraping-Bancos-MX
+```
 
--   El archivo debe estar digitalizado, ya que el scraping se realiza extrayendo texto.
--   El archivo debe ser un estado de cuenta bancario de la sucursal requerida.
--   El script se elaboró utilizando estados de cuenta hasta la fecha de julio de 2023. Si se desean extraer datos de formatos más recientes o lo suficientemente antiguos como para que haya cambios en el formato, es posible que el script no funcione correctamente.
--   Algunos bancos no están incluidos en la librería. Puedes consultar la lista de bancos para verificar su disponibilidad.
--   Algunos bancos pueden no proporcionar detalles precisos debido a que el scraping se basa en la descripción, y algunos bancos no incluyen descripciones detalladas.
--   Se realizaron múltiples pruebas con diferentes estados de cuenta para cada banco, excepto para Afirme e Inbursa, ya que solo se pudieron probar con un único estado de cuenta.
+### From Source
 
-# Lista de Bancos
+```bash
+git clone https://github.com/abelsr-kosmos/Scraping_Bancos_Mx.git
+cd Scraping_Bancos_Mx
+pip install -e .
+```
 
- - Afirme
- - BanBajio
- - Banorte
- - BanRegio
- - BBVA
- - HeyBanco
- - Inbursa
- - Santander
- - Scotiabank
+## Quick Start
+
+```python
+from Scraping_Bancos_MX import Scrap_Estado_BBVA
+
+# Extract data from a bank statement PDF
+df = Scrap_Estado_BBVA("path/to/statement.pdf")
+
+# View the extracted transactions
+print(df.head())
+```
+
+## Supported Banks
+
+| Bank | Function Name |
+|------|---------------|
+| Afirme | `Scrap_Estado_Afirme` |
+| Azteca | `Scrap_Estado_Azteca` |
+| BanBajio | `Scrap_Estado_BanBajio` |
+| Banamex | `Scrap_Estado_Banamex` |
+| BanCoppel | `BancoppelMovimientosExtractor` (class) |
+| Banjercito | `Scrap_Estado_Banjercito` |
+| Banorte | `Scrap_Estado_Banorte` |
+| BanRegio | `Scrap_Estado_BanRegio` |
+| BBVA | `Scrap_Estado_BBVA` |
+| HeyBanco | `Scrap_Estado_HeyBanco` |
+| HSBC | `ParserHSBC` (class) |
+| Inbursa | `Scrap_Estado_Inbursa` |
+| MercadoPago | `EstadoCuentaMovimientosExtractor` (class) |
+| Nu | `NuTableExtractor` (class) |
+| Santander | `Scrap_Estado_Santander` |
+| Scotiabank | `Scrap_Estado_Scotiabank` |
+
+## Usage Examples
+
+### Simple Function Interface (Most Banks)
+
+```python
+from Scraping_Bancos_MX import Scrap_Estado_BBVA, Scrap_Estado_Banorte
+
+# BBVA
+df_bbva = Scrap_Estado_BBVA("bbva_statement.pdf")
+
+# Banorte
+df_banorte = Scrap_Estado_Banorte("banorte_statement.pdf")
+```
+
+### Class-Based Interface (Some Banks)
+
+```python
+from Scraping_Bancos_MX import (
+    BancoppelMovimientosExtractor,
+    EstadoCuentaMovimientosExtractor,
+    NuTableExtractor,
+    ParserHSBC
+)
+
+# Bancoppel
+extractor = BancoppelMovimientosExtractor()
+df_bancoppel = extractor.run("bancoppel_statement.pdf")
+
+# MercadoPago
+extractor = EstadoCuentaMovimientosExtractor()
+df_mp = extractor.run("mercadopago_statement.pdf")
+
+# Nu
+extractor = NuTableExtractor()
+df_nu = extractor.to_dataframe("nu_statement.pdf")
+
+# HSBC (requires text extraction first)
+import pdfplumber
+with pdfplumber.open("hsbc_statement.pdf") as pdf:
+    text = "\n".join(page.extract_text() or "" for page in pdf.pages)
+    parser = ParserHSBC(text)
+    df_hsbc = parser.to_dataframe()
+```
+
+## Output DataFrame Structure
+
+All functions return a pandas DataFrame with the following columns:
+
+| Column | Description |
+|--------|-------------|
+| `fecha` | Transaction date (DD/MM/YYYY) |
+| `descripcion` | Full transaction description |
+| `deposito` | Deposit amount (if applicable) |
+| `retiro` | Withdrawal amount (if applicable) |
+| `saldo` | Account balance after transaction |
+
+Additional columns may be present depending on the bank:
+- `concepto` - Transaction concept/type
+- `origen` - Reference/origin of the transaction
+- `contraparte` - Counterparty (sender/recipient)
+- `institucion_contraparte` - Counterparty's bank institution
+- `tipo_movimiento` - Transaction type (SPEI, PAGO, COMPRA, COMISION, etc.)
+
+## Requirements
+
+- Python >= 3.9
+- pdfplumber >= 0.10.0
+- pandas >= 1.5.0
+- numpy >= 1.21.0
+
+## Important Notes
+
+- The PDF file must be **digitized/text-based**, not scanned images
+- The statement must be from one of the supported Mexican banks
+- The library was tested with bank statements up to July 2023. Newer or significantly older formats may not work correctly
+- Some banks may not provide complete details as the extraction relies on text descriptions in the PDF
+- Afirme and Inbursa were tested with limited sample data (only one statement each)
+
+## License
+
+MIT License - see LICENSE file for details.
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
+
+## Support
+
+If you encounter any issues or have questions, please [open an issue](https://github.com/abelsr-kosmos/Scraping_Bancos_Mx/issues) on GitHub.

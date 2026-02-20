@@ -30,7 +30,7 @@ def formatear_tabla(df):
     )
     df['descripcion'] = (origen + " " + concepto).str.replace(r"\s+", " ", regex=True).str.strip()
     df['descripcion'] = df['descripcion'].str.replace(r"^-\s-$", "-", regex=True)
-    df['fecha'] = df['Fecha']
+    df['fecha'] = df['Fecha'].apply(lambda x: x.strip().replace(" ", "/") if isinstance(x, str) else x)
     df['deposito'] = pd.to_numeric(df['Deposito'].astype(str).str.replace(',', '', regex=False), errors='coerce')
     df['retiro'] = pd.to_numeric(df['Retiro'].astype(str).str.replace(',', '', regex=False), errors='coerce')
     df['saldo'] = pd.to_numeric(df['Saldo'].astype(str).str.replace(',', '', regex=False), errors='coerce')

@@ -13,6 +13,7 @@ RE_TRASPASO = re.compile(r"TRASPASO")
 RE_RFC = re.compile(r"RFC")
 RE_PAGE = re.compile(r"Page")
 RE_FECHA = re.compile(r"\d{2}")
+RE_NOSPACE = re.compile(r"\s+")
 
 def Scrap_Estado(ruta_archivo):
     with pdfplumber.open(ruta_archivo) as estado:
@@ -36,10 +37,17 @@ def formatear_tabla(df):
     df = df.rename(columns={"Saldo": "saldo"})
     # Quita | a la descripcion
     df["descripcion"] = df["descripcion"].str.replace("|", " ", regex=False)
-    # Convert deposito, retiro y saldo a float, manejando comas y signos
-    df["deposito"] = df["deposito"].apply(lambda x: float(str(x).replace(",", "").replace("$", "").strip()) if pd.notna(x) and str(x).strip() != "" else None)
-    df["retiro"] = df["retiro"].apply(lambda x: float(str(x).replace(",", "").replace("$", "").strip()) if pd.notna(x) and str(x).strip() != "" else None)
-    df["saldo"] = df["saldo"].apply(lambda x: float(str(x).replace(",", "").replace("$", "").strip()) if pd.notna(x) and str(x).strip() != "" else None)
+
+    for col in ["deposito", "retiro", "saldo"]:
+        serie = (
+            df[col]
+            .astype(str)
+            .str.replace(",", "", regex=False)
+            .str.replace("$", "", regex=False)
+            .str.strip()
+        )
+        df[col] = pd.to_numeric(serie.where(serie != ""), errors="coerce")
+
     return df[["fecha", "descripcion", "deposito", "retiro", "saldo"]]
 
 def analisis_movimientos(df):
@@ -124,11 +132,11 @@ def analisis_tipo_movimiento(df):
 def analizar_estados(estado):
     movimientos_paginas = []
     for pagina in estado.pages:
-        texto = pagina.extract_text() or ""
-        texto = texto.replace("\n", "").replace(" ", "")
-        if re.search("DIACONCEPTOCARGOSABONOSSALDO", texto) and not re.search("GráficoTransaccional", texto) and not re.search("REGIOCUENTA", texto):
-                movimientos = extraer_movimientos_pagina(pagina,texto)
-                movimientos_paginas.append(movimientos)
+        texto_raw = pagina.extract_text_simple() or ""
+        texto = RE_NOSPACE.sub("", texto_raw)
+        if "DIACONCEPTOCARGOSABONOSSALDO" in texto and "GráficoTransaccional" not in texto and "REGIOCUENTA" not in texto:
+            movimientos = extraer_movimientos_pagina(pagina.chars, texto)
+            movimientos_paginas.append(movimientos)
     if movimientos_paginas:
         df = pd.concat(movimientos_paginas, ignore_index=True)
     else:
@@ -192,8 +200,7 @@ def incluir_movimientos(df):
     return df
 
 
-def extraer_movimientos_pagina(pagina,texto):
-    caracteres = pagina.chars
+def extraer_movimientos_pagina(caracteres,texto):
     columnas = agrupar_columnas(caracteres)
     filas = unificar_columnas(columnas)
     filas = eliminar_movimientos_no_deseados(filas)
@@ -307,7 +314,6 @@ if __name__ == "__main__":
     
     ruta_archivo = "/home/abelsr/Proyects/OCR-General/Scraping_Bancos_Mx/notebooks/gettablefileurl (59).pdf"
     df = Scrap_Estado(ruta_archivo)
-    df["descripcion"] = df["descripcion"].str[:20]
     
     pr.disable()
     s = StringIO()
@@ -316,6 +322,7 @@ if __name__ == "__main__":
     print(s.getvalue())
     
     # To ensure results
+    df["descripcion"] = df["descripcion"].str[:20]
     print(df.head())
     print(f"Total depositos: {df['deposito'].notna().sum()}, Total retiros: {df['retiro'].notna().sum()}")
     print(f"Suma depositos: {df['deposito'].sum()}, Suma retiros: {df['retiro'].sum()}")

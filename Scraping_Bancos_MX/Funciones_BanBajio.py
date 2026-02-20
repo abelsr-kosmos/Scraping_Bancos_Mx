@@ -11,42 +11,86 @@ def Scrap_Estado(ruta_archivo):
 
 def formatear_tabla(df):
     df = df.copy()
-    df['descripcion'] = df['Origen'] + " " + df['Concepto'].str.replace("|"," ")
+    origen = (
+        df['Origen']
+        .fillna("-")
+        .astype(str)
+        .replace({"nan": "-", "None": "-"})
+        .str.strip()
+    )
+    concepto = (
+        df['Concepto']
+        .fillna("-")
+        .astype(str)
+        .replace({"nan": "-", "None": "-"})
+        .str.replace("|", " ", regex=False)
+        .str.replace(r"\s+", " ", regex=True)
+        .str.strip()
+    )
+    df['descripcion'] = (origen + " " + concepto).str.replace(r"\s+", " ", regex=True).str.strip()
+    df['descripcion'] = df['descripcion'].str.replace(r"^-\s-$", "-", regex=True)
     df['fecha'] = df['Fecha']
-    df['deposito'] = df['Deposito']
-    df['retiro'] = df['Retiro']
-    df['saldo'] = df['Saldo']
+    df['deposito'] = pd.to_numeric(df['Deposito'].astype(str).str.replace(',', '', regex=False), errors='coerce')
+    df['retiro'] = pd.to_numeric(df['Retiro'].astype(str).str.replace(',', '', regex=False), errors='coerce')
+    df['saldo'] = pd.to_numeric(df['Saldo'].astype(str).str.replace(',', '', regex=False), errors='coerce')
     df = df[['fecha', 'descripcion', 'deposito', 'retiro', 'saldo']]
     return df
 
 def extraer_movimientos_primera_pagina(pagina):
-    periodo = pagina.extract_text().split("\n")
+    texto_pagina = pagina.extract_text() or ""
+    periodo = texto_pagina.split("\n")
     periodo = periodo[1].split(" ")
     periodo = periodo[-1]
-    texto = pagina.extract_text().split("FECHA DESCRIPCION DE LA OPERACION")
+    texto = texto_pagina.split("FECHA DESCRIPCION DE LA OPERACION")
 
     ultima_pagina = False
     if len(texto) == 1:
         return False
     else:
-        texto = pagina.extract_text().split("FECHA DESCRIPCION DE LA OPERACION")[1]
+        texto = texto_pagina.split("FECHA DESCRIPCION DE LA OPERACION")[1]
         texto = texto.split("CONTINUA EN LA SIGUIENTE PAGINA")[0]
         if re.search("TOTAL DE MOVIMIENTOS EN EL PERIODO",texto):
             ultima_pagina = True
+        for marcador in ["SALDO TOTAL*", "TOTAL DE MOVIMIENTOS EN EL PERIODO", "RESUMEN DEL PERIODO"]:
+            texto = texto.split(marcador)[0]
         texto = texto.split("\n")
         texto = texto[2:]
         if ultima_pagina:
             texto = texto[:-3]
         if re.search(r"^\d{4}$",periodo):
-            texto += f" °{periodo}°"
+            texto.append(f"°{periodo}°")
         return texto
 
 def scrap_movimientos(movimientos):
     numero_movimiento = 0
     movimientos_identificados = []
+
+    marcadores_fin = [
+        "TOTAL DE MOVIMIENTOS EN EL PERIODO",
+        "RESUMEN DEL PERIODO",
+        "CODIGO",
+        "CÓDIGO",
+        "SELLO DIGITAL",
+        "CADENA ORIGINAL",
+        "CERTIFICACION DIGITAL",
+        "NOMBRE O RAZON SOCIAL DEL RECEPTOR",
+        "NOMBRE O RAZÓN SOCIAL DEL RECEPTOR",
+    ]
+
     for movimiento in movimientos:
+        if not str(movimiento).strip():
+            continue
+
+        movimiento_mayus = str(movimiento).upper()
+        if any(marcador in movimiento_mayus for marcador in marcadores_fin):
+            break
+
         if re.match(r"\d{1,2} \w{3}",movimiento):
             numero_movimiento += 1
+
+        if numero_movimiento == 0:
+            continue
+
         movimientos_identificados.append({"movimiento":movimiento,"numero_movimiento":numero_movimiento})
         
     return pd.DataFrame(movimientos_identificados)
@@ -87,10 +131,15 @@ def unificar_movimiento(df):
     return moviemiento
 
 def unificar_tabla(movimmientos):
-    total_movimientos = movimmientos["numero_movimiento"].max()
+    if movimmientos.empty:
+        return pd.DataFrame(columns=["Descripcion", "Movimiento", "Monto", "Saldo"])
+
     movimientos_unificados = []
-    for i in range(0,total_movimientos+1):
-        movimientos_unificados.append(unificar_movimiento(movimmientos[movimmientos["numero_movimiento"]==i]))
+    for i in sorted(movimmientos["numero_movimiento"].unique()):
+        subset = movimmientos[movimmientos["numero_movimiento"] == i]
+        if subset.empty:
+            continue
+        movimientos_unificados.append(unificar_movimiento(subset))
     return pd.DataFrame(movimientos_unificados)
 
 def extraer_movimientos_estado_de_cuenta(estado):
@@ -98,24 +147,69 @@ def extraer_movimientos_estado_de_cuenta(estado):
     for pag in estado.pages:
         movs = extraer_movimientos_primera_pagina(pag)
         if  movs:
-            movimientos = movimientos + (extraer_movimientos_primera_pagina(pag))
+            movimientos = movimientos + movs
     return movimientos
     
 
 def identificar_cargo_abono(df):
     df["Cargos"] = ""
     df["Abonos"] = ""
+
+    def limpiar_numero(valor):
+        texto = str(valor).replace(",", "").strip()
+        if texto in ["", "-1", "nan", "None"]:
+            return None
+        try:
+            return float(texto)
+        except (TypeError, ValueError):
+            return None
+
+    def clasificar_sin_saldo_anterior(descripcion, monto_num):
+        if monto_num is None:
+            return ""
+
+        descripcion_mayus = str(descripcion).upper()
+        claves_abono = ["DEPÓSITO", "DEPOSITO", "ABONO", "RECIBIDO", "ORDENANTE:"]
+        claves_cargo = ["ENVÍO", "ENVIO", "COMPRA", "DISPOSICION", "PAGO", "COMISION", "IVA", "BENEFICIARIO:"]
+
+        if monto_num < 0:
+            return "CARGOS"
+        if any(clave in descripcion_mayus for clave in claves_abono):
+            return "ABONOS"
+        if any(clave in descripcion_mayus for clave in claves_cargo):
+            return "CARGOS"
+        return "CARGOS"
+
     for i in range(1,df.shape[0]):
-        saldo_anterior = df.iloc[i-1,3].replace(",","")
-        saldo_actual = float(df.iloc[i,3].replace(",",""))
-        monto = df.iloc[i,2].replace(",","")
-        saldo_ideal = float(saldo_anterior) + float(monto)
+        saldo_anterior = limpiar_numero(df.iloc[i-1,3])
+        saldo_actual = limpiar_numero(df.iloc[i,3])
+        monto_num = limpiar_numero(df.iloc[i,2])
+        if saldo_anterior is None or saldo_actual is None or monto_num is None:
+            continue
+
+        saldo_ideal = saldo_anterior + monto_num
         saldo_ideal = round(saldo_ideal,2)
-        monto = str(monto)
+        monto = str(df.iloc[i,2]).replace(",","")
         if saldo_actual != saldo_ideal:
             df.loc[i,"Cargos"] = monto
         else:
             df.loc[i,"Abonos"] = monto  
+
+    for i in range(df.shape[0]):
+        if str(df.loc[i, "Cargos"]).strip() != "" or str(df.loc[i, "Abonos"]).strip() != "":
+            continue
+
+        monto_num = limpiar_numero(df.loc[i, "Monto"])
+        if monto_num is None:
+            continue
+
+        clasificacion = clasificar_sin_saldo_anterior(df.loc[i, "Descripcion"], monto_num)
+        monto_texto = f"{abs(monto_num):.2f}" if monto_num is not None else ""
+        if clasificacion == "ABONOS":
+            df.loc[i, "Abonos"] = monto_texto
+        elif clasificacion == "CARGOS":
+            df.loc[i, "Cargos"] = monto_texto
+
     return df
 
 def separar_fecha(df):
@@ -130,14 +224,14 @@ def separar_fecha(df):
     return df
 
 def separar_referencia(df):
-    df["Referencia"] = None  
+    df["Referencia"] = "-"  
     for index, row in df.iterrows():
         texto = row["Descripcion"]
-        matches = re.findall(r"\d{7}", texto)
+        matches = re.findall(r"\b\d{7,}\b", texto)
         if len(matches) > 0:
             referencia = matches[0]
             df.at[index, "Referencia"] = referencia
-            df.at[index, "Descripcion"] = re.sub(r"\d{7}", "", texto, count=1)
+            df.at[index, "Descripcion"] = re.sub(r"\b\d{7,}\b", "", texto, count=1)
     return df
 
 def incluir_anio(df):
@@ -272,7 +366,7 @@ if __name__ == "__main__":
     console = Console()
     ruta_archivo = "/home/abelsr/Proyects/OCR-General/Scraping_Bancos_Mx/notebooks/2033_033620303_1_20260105114600.pdf"
     tabla = Scrap_Estado(ruta_archivo)
-    tabla['descripcion'] = tabla['descripcion'][:10] + "..."
+    tabla['descripcion'] = tabla['descripcion'].astype(str).str.slice(0, 120) + "..."
     
     # Convert DataFrame to Rich Table
     rich_table = Table(title="Estado de Cuenta")
@@ -283,3 +377,14 @@ if __name__ == "__main__":
         rich_table.add_row(*[str(val) for val in row])
     
     console.print(rich_table)
+    
+    
+    # Resumen de depositos y retiros (totales)
+    depositos = tabla['deposito'].sum()
+    retiros = tabla['retiro'].sum()
+    console.print(f"Total de depósitos: ${depositos}")
+    console.print(f"Total de retiros: ${retiros}")
+    saldo_inicial = tabla['saldo'].iloc[0]
+    saldo_final = tabla['saldo'].iloc[-1]
+    console.print(f"Saldo inicial: ${saldo_inicial}")
+    console.print(f"Saldo final: ${saldo_final}")

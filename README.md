@@ -151,7 +151,7 @@ Additional columns may be present depending on the bank:
 
 - The PDF file must be **digitized/text-based**, not scanned images
 - The statement must be from one of the supported Mexican banks
-- The library was tested with bank statements up to July 2023. Newer or significantly older formats may not work correctly
+- The library was tested with bank statements up to February 2026. Newer or significantly older formats may not work correctly
 - Some banks may not provide complete details as the extraction relies on text descriptions in the PDF
 - Afirme and Inbursa were tested with limited sample data (only one statement each)
 

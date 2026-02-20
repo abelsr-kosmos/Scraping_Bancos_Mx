@@ -1,3 +1,6 @@
 __pycache__/
 proto/
 *.pdf
+notebooks/
+.vscode/
+.venv/

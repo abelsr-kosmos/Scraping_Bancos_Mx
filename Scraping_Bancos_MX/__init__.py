@@ -22,6 +22,7 @@ from .Funciones_MercadoPago import *
 from .Funciones_Nu import *
 from .Funciones_Bancoppel import *
 from .Funciones_Banjercito import *
+from .Funciones_Libranza_IMSS import *
 
 __all__ = [
     "Scrap_Estado_Afirme",
@@ -40,4 +41,5 @@ __all__ = [
     "Scrap_Estado_Nu",
     "Scrap_Estado_Bancoppel",
     "Scrap_Estado_Banjercito",
+    "Scrap_Libranza_IMSS",
 ]

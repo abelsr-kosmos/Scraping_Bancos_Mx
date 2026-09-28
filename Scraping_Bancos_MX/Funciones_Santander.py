@@ -2,6 +2,8 @@ import pandas as pd
 import re
 import pdfplumber
 
+from ._normalizacion import normalizar_columnas_estandar
+
 def Scrap_Estado_Santander(ruta_archivo):
     estado = pdfplumber.open(ruta_archivo)
     tabla = analizar_estados(estado)
@@ -19,14 +21,7 @@ def analisis_movimientos(df):
 
 def normalizar_tabla(df):
     df = df.drop('Movimiento', axis=1)
-    df.columns = [col.lower() for col in df.columns]
-    df = df.rename(columns={'concepto': 'descripcion'})
-    for col in ('deposito', 'retiro', 'saldo'):
-        df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', '', regex=False), errors='coerce')
-    columnas_core = ['fecha', 'descripcion', 'deposito', 'retiro', 'saldo']
-    columnas_extra = [c for c in df.columns if c not in columnas_core]
-    df = df[columnas_core + columnas_extra]
-    return df
+    return normalizar_columnas_estandar(df)
 
 def analisis_concepto(df):
     df["ConceptoMovimiento"] = ""
@@ -55,9 +50,9 @@ def analisis_contraparte(df):
     df["Contraparte"] = ""
     for index,row in df.iterrows():
         destinatario = "-"
-        if re.search("SPEI",row["Concepto"]):
-            destinatario = row["Concepto"].split("LCLIENTE")[1]
-            
+        if re.search("SPEI",row["Concepto"]) and "AL CLIENTE" in row["Concepto"]:
+            destinatario = row["Concepto"].split("AL CLIENTE")[1]
+
             try:
                 destinatario = destinatario.split("(")[0]
             except:
@@ -93,7 +88,7 @@ def analizar_estados(estado):
         texto = pagina.extract_text()
         texto = texto.replace("\n", "")
         texto = texto.replace(" ", "")
-        if re.search("FECHAFOLIODESCRIPCIONDEPOSITOSRETIROSSALDO", texto) :
+        if re.search("FECHAFOLIODESCRIPCIONDEPOSITOS?RETIROS?SALDO", texto) :
                 movimientos = extraer_movimientos_pagina(pagina,texto)
                 df = pd.concat([df, pd.DataFrame(movimientos)])    
                 contador += 1

@@ -330,8 +330,8 @@ class TransactionsParser:
             saldo_val = row['saldo']
 
         # Separar retiros y depósitos
-        df['retiro'] = df['monto'].apply(lambda x: abs(x) if x < 0 else None)
-        df['deposito'] = df['monto'].apply(lambda x: abs(x) if x > 0 else None)
+        df['retiro'] = df['monto'].apply(lambda x: abs(x) if pd.notnull(x) and x < 0 else None)
+        df['deposito'] = df['monto'].apply(lambda x: abs(x) if pd.notnull(x) and x > 0 else None)
         df = df.drop(columns=['monto'])
 
         # Orden final de columnas

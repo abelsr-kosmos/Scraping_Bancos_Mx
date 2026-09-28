@@ -39,7 +39,6 @@ class ParserHSBC:
         bloques = self.split_movimientos(sec)
         rows = []
         prev_saldo = 0
-        prev_fecha = None
 
         for b in bloques:
             det = b.replace('\n', ' ').replace(', ', ',')
@@ -47,9 +46,14 @@ class ParserHSBC:
             if not nums:
                 continue
 
+            # `det` viene de un bloque separado por P3, que siempre empieza
+            # con "DD MES..." (P3 exige \d{2}\s+[A-Z]+ al inicio del match),
+            # así que det[:2] es el día real de forma confiable. P5 casi
+            # nunca encontrará nada aquí porque split_movimientos ya hace
+            # .strip() a cada bloque (sin espacio antes del día no puede
+            # matchear "\s\d{2}\s"); se deja como respaldo por si acaso.
             fechas = self.P5.findall(det)
             fecha = fechas[0].strip() if fechas else det[:2]
-            fecha = fecha if prev_fecha is None or int(fecha) - int(prev_fecha) <= 3 else str(prev_fecha)
 
             movs = nums if len(nums) == 2 else [nums[0], None]
             abono = float(movs[0].replace(',', ''))
@@ -60,7 +64,6 @@ class ParserHSBC:
             retiro = min(0, valor)
             deposito = max(0, valor)
             prev_saldo = saldo
-            prev_fecha = fecha
 
             rows.append(MovimientoHSBC(fecha, det, -retiro, deposito, saldo))
 

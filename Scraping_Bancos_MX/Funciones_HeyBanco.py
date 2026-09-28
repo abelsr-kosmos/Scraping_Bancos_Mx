@@ -2,6 +2,8 @@ import pandas as pd
 import re
 import pdfplumber
 
+from ._normalizacion import normalizar_columnas_estandar
+
 def Scrap_Estado_HeyBanco(ruta_archivo):
     estado = pdfplumber.open(ruta_archivo)
     tabla = analizar_estados(estado)
@@ -19,14 +21,7 @@ def analisis_movimientos(df):
 
 def normalizar_tabla(df):
     df = df.drop('Movimiento', axis=1)
-    df.columns = [col.lower() for col in df.columns]
-    df = df.rename(columns={'concepto': 'descripcion'})
-    for col in ('deposito', 'retiro', 'saldo'):
-        df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', '', regex=False), errors='coerce')
-    columnas_core = ['fecha', 'descripcion', 'deposito', 'retiro', 'saldo']
-    columnas_extra = [c for c in df.columns if c not in columnas_core]
-    df = df[columnas_core + columnas_extra]
-    return df
+    return normalizar_columnas_estandar(df)
 
 def analisis_concepto(df):
     df["ConceptoMovimiento"] = ""

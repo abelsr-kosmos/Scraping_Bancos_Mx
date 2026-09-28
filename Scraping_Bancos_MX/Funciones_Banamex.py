@@ -5,10 +5,29 @@ import pdfplumber
 import pandas as pd
 
 def Scrap_Estado_Banamex(ruta_archivo):
+    """
+    Extrae la tabla de movimientos de un estado de cuenta de Banamex.
+
+    LIMITACIÓN CONOCIDA: en estados de cuenta con muchas transacciones de
+    terminal/caja por día (formato "CAJA ... AUT ... / HORA ... <monto>"
+    antes de cada línea "dd MES ..."), el signo de cada movimiento se decide
+    por palabras clave en la descripción (RECIBIDO/DEPOSITO = depósito;
+    PAGO/COMISION/IVA/COBRO/CARGO/INTERBANCARIO = retiro) porque ni la
+    posición x del monto ni el saldo (que solo se imprime de vez en cuando)
+    son señales confiables en ese layout. Validado contra 2 estados reales:
+    la cobertura de movimientos es casi completa, pero la reconciliación de
+    saldo por tramos no cuadra al 100% (probablemente algunas transacciones
+    con conceptos no cubiertos por las palabras clave, o con más de un monto
+    en su bloque de continuación). Tratar con más cautela que otros bancos
+    si la precisión exacta de depósito/retiro es crítica.
+    """
     df = procesar_pdf(ruta_archivo)
     df.columns = [col.lower() for col in df.columns]
+    # Una fila es un movimiento real si tiene retiro o depósito; NO exigir
+    # también 'saldo' aquí, porque varios estados de cuenta reales solo lo
+    # imprimen de vez en cuando (no en cada movimiento) - exigirlo descartaba
+    # la enorme mayoría de movimientos válidos.
     df = df.dropna(subset=['retiro', 'deposito'], how='all')
-    df = df.dropna(subset=['saldo'], how='all')
     return df
 
 def es_linea_movimiento(linea):
@@ -129,6 +148,19 @@ def procesar_pdf(pdf_path):
 
         todos_los_movimientos = []
         movimiento_actual = None
+        # En algunos estados de cuenta, el bloque "CAJA/AUT/HORA/SUC <monto>"
+        # de una transacción se imprime ANTES de su propia línea "dd MES ..."
+        # (pertenece a la transacción que sigue, no a la que está abierta en
+        # ese momento). Estos montos se guardan aquí hasta que arranca el
+        # siguiente movimiento, momento en el que se le asignan a ese
+        # movimiento nuevo en vez de al que se acaba de cerrar.
+        #
+        # "Monto" guarda la magnitud sin signo (el layout real no separa de
+        # forma confiable la columna de Cargos de la de Abonos por posición
+        # x: en al menos un estado real, un pago claramente saliente cae del
+        # lado de "Depositos"). El signo se decide después comparando contra
+        # el Saldo de la fila anterior, igual que en Funciones_Base.py.
+        monto_pendiente = {"Monto": None, "Saldo": None}
 
         # =======================
         # 4) RECORRER TODAS LAS PÁGINAS PARA DETECTAR MOVIMIENTOS
@@ -195,34 +227,42 @@ def procesar_pdf(pdf_path):
                     movimiento_actual = {
                         "Fecha": f"{tokens_line[0]} {tokens_line[1]}",
                         "Descripcion": "",
-                        "Retiro": None,
-                        "Deposito": None,
-                        "Saldo": None
+                        "Monto": monto_pendiente["Monto"],
+                        "Saldo": monto_pendiente["Saldo"],
                     }
+                    monto_pendiente = {"Monto": None, "Saldo": None}
+                    es_linea_nueva = True
                 else:
                     # Continuación
                     if not movimiento_actual:
                         movimiento_actual = {
                             "Fecha": None,
                             "Descripcion": "",
-                            "Retiro": None,
-                            "Deposito": None,
+                            "Monto": None,
                             "Saldo": None
                         }
+                    es_linea_nueva = False
 
-                # Asignar montos por coordenadas
+                # Asignar montos por coordenadas. Si la línea es continuación
+                # (no la que abrió el movimiento), el monto se guarda en el
+                # buffer por si en realidad pertenece al siguiente movimiento
+                # (ver comentario de monto_pendiente arriba); si para cuando
+                # cierre este movimiento nadie reclamó el buffer, se pierde,
+                # que es preferible a asignárselo al movimiento equivocado.
+                destino = movimiento_actual if es_linea_nueva else monto_pendiente
                 for w in words_in_line:
                     txt = w['text'].strip()
                     center_w = (w['x0'] + w['x1']) / 2
 
                     if es_numero_monetario(txt):
                         val = parse_monetario(txt)
-                        if center_w > 345 and center_w < 395:
-                            movimiento_actual["Retiro"] = val
-                        elif center_w > 395 and center_w < 475:
-                            movimiento_actual["Deposito"] = val
-                        elif center_w > 480:
-                            movimiento_actual["Saldo"] = val
+                        # Límite (centro x) calibrado contra estados reales:
+                        # SALDO ~452, con margen amplio por debajo para el
+                        # monto (Cargos/Abonos ~283-380, según el estado).
+                        if center_w > 260 and center_w < 415:
+                            destino["Monto"] = val
+                        elif center_w > 415:
+                            destino["Saldo"] = val
                     else:
                         # Texto al concepto (omitir dd y mmm)
                         if re.match(r'^\d{1,2}$', txt) or txt in MESES_CORTOS:
@@ -240,10 +280,64 @@ def procesar_pdf(pdf_path):
     df = pd.DataFrame(todos_los_movimientos, columns=[
         "Fecha",
         "Descripcion",
-        "Retiro",
-        "Deposito",
-        "Saldo"
+        "Monto",
+        "Saldo",
     ])
+    df = df[df["Monto"].notna() | df["Saldo"].notna()]
+    df = df.reset_index(drop=True)
+
+    # Signo de "Monto": el saldo solo se imprime de vez en cuando (no en cada
+    # movimiento) y la posición x del monto NO distingue Cargos de Abonos en
+    # los estados de cuenta reales usados para validar esto (una misma
+    # posición x aparece tanto en pagos hechos como en pagos recibidos, muy
+    # probablemente porque depende de la sucursal/caja que procesó el
+    # movimiento, no de si es cargo o abono). La descripción sí es confiable:
+    # "PAGO RECIBIDO"/"DEPOSITO" son abonos, el resto de movimientos con
+    # "PAGO"/"COMISION"/"IVA"/"COBRO"/"CARGO" son cargos. El delta de saldo
+    # se usa como respaldo solo cuando la descripción no da ninguna pista Y
+    # sí hay saldo de referencia (p.ej. un concepto no reconocido).
+    RE_CLAVE_ABONO = re.compile(r"RECIBID|DEPOSITO|DEP[ÓO]SITO|ABONO", re.IGNORECASE)
+    RE_CLAVE_CARGO = re.compile(r"PAGO|COMISION|COMISIÓN|IVA|COBRO|CARGO|INTERBANCARIO|RETIRO", re.IGNORECASE)
+
+    retiro = []
+    deposito = []
+    saldo_anterior = None
+    for _, fila in df.iterrows():
+        monto = fila["Monto"]
+        saldo_actual = fila["Saldo"]
+        descripcion = fila["Descripcion"] or ""
+        if pd.isna(monto):
+            monto = None
+        if pd.isna(saldo_actual):
+            saldo_actual = None
+
+        if monto is None:
+            es_abono = None
+        elif RE_CLAVE_ABONO.search(descripcion):
+            es_abono = True
+        elif RE_CLAVE_CARGO.search(descripcion):
+            es_abono = False
+        elif saldo_anterior is not None and saldo_actual is not None:
+            es_abono = saldo_actual >= saldo_anterior
+        else:
+            es_abono = None
+
+        if es_abono is True:
+            deposito.append(monto)
+            retiro.append(None)
+        elif es_abono is False:
+            retiro.append(monto)
+            deposito.append(None)
+        else:
+            retiro.append(None)
+            deposito.append(None)
+
+        if saldo_actual is not None:
+            saldo_anterior = saldo_actual
+
+    df["Retiro"] = retiro
+    df["Deposito"] = deposito
+    df = df.drop(columns=["Monto"])
     df = df[df["Retiro"].notna() | df["Deposito"].notna() | df["Saldo"].notna()]
 
     return df

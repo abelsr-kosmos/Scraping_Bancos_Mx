@@ -17,6 +17,13 @@ MARCADORES_FIN_MOVIMIENTOS = [
 
 RE_FECHA_CORTA = re.compile(r"\d{1,2}\ \w{3}")
 RE_REFERENCIA = re.compile(r"\b\d{7,}\b")
+RE_ANIO_PERIODO = re.compile(r"PERIODO:.*?(\d{4})")
+
+
+def _buscar_anio_periodo(texto: str) -> str | None:
+    """Busca el año de "PERIODO: ... DE <AAAA>" en el texto de una página."""
+    match = RE_ANIO_PERIODO.search(texto)
+    return match.group(1) if match else None
 
 def Scrap_Estado_BanBajio(ruta_archivo):
     with pdfplumber.open(ruta_archivo) as estado:
@@ -58,14 +65,15 @@ def extraer_movimientos_primera_pagina(pagina):
 
     return _extraer_movimientos_desde_texto(texto_pagina)
 
-def _extraer_movimientos_desde_texto(texto_pagina):
+def _extraer_movimientos_desde_texto(texto_pagina, anio_fallback=None):
     if "FECHA DESCRIPCION DE LA OPERACION" not in texto_pagina:
         return False
 
-    periodo = texto_pagina.split("\n")
-    if len(periodo) < 2:
-        return False
-    periodo = periodo[1].split(" ")[-1]
+    # El año normalmente sale de la línea "PERIODO: ... DE <AAAA>" de esta
+    # misma página, pero esa línea puede vivir en la carátula (otra página)
+    # si el detalle de movimientos empieza en una página aparte; en ese caso
+    # se usa el año encontrado previamente en el documento (anio_fallback).
+    periodo = _buscar_anio_periodo(texto_pagina) or anio_fallback
     texto = texto_pagina.split("FECHA DESCRIPCION DE LA OPERACION", 1)
 
     ultima_pagina = False
@@ -82,7 +90,7 @@ def _extraer_movimientos_desde_texto(texto_pagina):
         texto = texto[2:]
         if ultima_pagina:
             texto = texto[:-3]
-        if periodo.isdigit() and len(periodo) == 4:
+        if periodo and periodo.isdigit() and len(periodo) == 4:
             texto.append(f"°{periodo}°")
         return texto
 
@@ -160,9 +168,15 @@ def extraer_movimientos_estado_de_cuenta(estado):
     movimientos = []
     en_tabla = False
 
-    for pag in estado.pages:
-        texto_pagina = pag.extract_text_simple() or pag.extract_text() or ""
-        movs = _extraer_movimientos_desde_texto(texto_pagina)
+    textos_paginas = [pag.extract_text_simple() or pag.extract_text() or "" for pag in estado.pages]
+    anio_fallback = None
+    for texto_pagina in textos_paginas:
+        anio_fallback = _buscar_anio_periodo(texto_pagina)
+        if anio_fallback:
+            break
+
+    for texto_pagina in textos_paginas:
+        movs = _extraer_movimientos_desde_texto(texto_pagina, anio_fallback)
         if movs:
             en_tabla = True
             movimientos.extend(movs)
@@ -230,11 +244,17 @@ def separar_referencia(df):
 def incluir_anio(df):
     df["Anio"] = None
     estado_diciembre = False
+    anio = None
     for index, row in df.iterrows():
         if re.search("°",row["Descripcion"]):
             anio_sin_modificar = row["Descripcion"].split("°")[1]
             anio = anio_sin_modificar.replace("|","")
             #df.at[index, "Descripcion"] = re.sub(f"\|\|\s\|°\|[0-9\|]+\|°", "", row["Descripcion"], count=1)
+    if anio is None:
+        raise ValueError(
+            "No se pudo determinar el año del periodo (no se encontró "
+            "'PERIODO: ... DE <AAAA>' en ninguna página del PDF)."
+        )
     for index, row in df.iterrows():
         if row["Fecha"] is not None:
 

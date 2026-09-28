@@ -121,6 +121,25 @@ with pdfplumber.open("hsbc_statement.pdf") as pdf:
     df_hsbc = parser.to_dataframe()
 ```
 
+## Unified Interface (optional)
+
+Every bank is also reachable through a common `BankStatementParser` interface
+and typed models, without changing what the underlying function/class does:
+
+```python
+from Scraping_Bancos_MX import get_parser
+
+parser = get_parser("BBVA")          # any key from PARSERS
+df = parser.parse("statement.pdf")   # same DataFrame as Scrap_Estado_BBVA
+
+estado = parser.to_estado_cuenta("statement.pdf")  # typed Movimiento/EstadoCuenta model
+print(estado.total_depositos, estado.total_retiros)
+```
+
+`PARSERS` lists every supported key (`"BBVA"`, `"Banjercito"`, `"HSBC"`, `"Nu"`,
+etc.). This is purely an additive convenience layer — the original
+`Scrap_Estado_<Banco>` functions and classes keep working exactly as before.
+
 ## Output DataFrame Structure
 
 All functions return a pandas DataFrame with the following columns:

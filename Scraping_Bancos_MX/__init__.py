@@ -24,6 +24,30 @@ from .Funciones_Bancoppel import *
 from .Funciones_Banjercito import *
 from .Funciones_Libranza_IMSS import *
 
+from .base import BankStatementParser
+from .models import Movimiento, EstadoCuenta
+from .parsers import (
+    AfirmeParser,
+    AztecaParser,
+    BanBajioParser,
+    BanamexParser,
+    BanRegioParser,
+    BanjercitoParser,
+    BanorteParser,
+    BBVAParser,
+    HeyBancoParser,
+    InbursaParser,
+    SantanderParser,
+    ScotiabankParser,
+    HSBCParser,
+    MercadoPagoParser,
+    NuParser,
+    BancoppelParser,
+    LibranzaIMSSParser,
+    PARSERS,
+    get_parser,
+)
+
 __all__ = [
     "Scrap_Estado_Afirme",
     "Scrap_Estado_BBVA",
@@ -42,4 +66,27 @@ __all__ = [
     "BancoppelMovimientosExtractor",
     "Scrap_Estado_Banjercito",
     "Scrap_Libranza_IMSS",
+    # Interfaz unificada (opcional): modelos + clases parser por banco
+    "BankStatementParser",
+    "Movimiento",
+    "EstadoCuenta",
+    "AfirmeParser",
+    "AztecaParser",
+    "BanBajioParser",
+    "BanamexParser",
+    "BanRegioParser",
+    "BanjercitoParser",
+    "BanorteParser",
+    "BBVAParser",
+    "HeyBancoParser",
+    "InbursaParser",
+    "SantanderParser",
+    "ScotiabankParser",
+    "HSBCParser",
+    "MercadoPagoParser",
+    "NuParser",
+    "BancoppelParser",
+    "LibranzaIMSSParser",
+    "PARSERS",
+    "get_parser",
 ]

@@ -123,20 +123,24 @@ def extraer_movimientos_pagina(pagina,texto):
     return filas
 
 def agrupar_columnas(caracteres):
+    # Límites (x1) calibrados contra estados reales; los dos PDFs de muestra
+    # usan corrimientos horizontales ligeramente distintos entre sí (parecen
+    # de dos versiones/periodos del mismo formato), así que los márgenes
+    # aquí son generosos a propósito para cubrir ambos con espacio de sobra.
     columnas = []
     for caracter in caracteres:
         coordenada = (caracter["x1"])
-        if coordenada <= 47 and coordenada >= 13:
+        if coordenada <= 46 and coordenada >= 10:
             columnas.append({"Caracter": caracter["text"], "Top": caracter["top"],"X":caracter["x1"],"Columna": 0})
-        elif coordenada <= 106  and coordenada > 47:
+        elif coordenada <= 100  and coordenada > 46:
             columnas.append({"Caracter": caracter["text"], "Top": caracter["top"],"X":caracter["x1"],"Columna": 1})
-        elif coordenada <= 366  and coordenada > 106:
+        elif coordenada <= 350  and coordenada > 100:
             columnas.append({"Caracter": caracter["text"], "Top": caracter["top"],"X":caracter["x1"],"Columna": 2})
-        elif coordenada <= 430  and coordenada > 366:
+        elif coordenada <= 450  and coordenada > 350:
             columnas.append({"Caracter": caracter["text"], "Top": caracter["top"],"X":caracter["x1"],"Columna": 3})
-        elif coordenada <= 496  and coordenada > 430:
+        elif coordenada <= 515  and coordenada > 450:
             columnas.append({"Caracter": caracter["text"], "Top": caracter["top"],"X":caracter["x1"],"Columna": 4})
-        elif coordenada <= 566  and coordenada > 496:
+        elif coordenada <= 575  and coordenada > 515:
             columnas.append({"Caracter": caracter["text"], "Top": caracter["top"],"X":caracter["x1"],"Columna": 5})
     columnas = pd.DataFrame(columnas)
     return columnas
@@ -157,9 +161,13 @@ def unificar_columna(top):
         elif row["Columna"] == 2:
             concepto = concepto + row["Caracter"]
         elif row["Columna"] == 3:
-            deposito = deposito + row["Caracter"]
-        elif row["Columna"] == 4:
+            # Columna 3 cae en la posición de CARGOS (= retiro), no de
+            # abonos; el código original la etiquetaba "deposito", invirtiendo
+            # el signo de cada movimiento.
             retiro = retiro + row["Caracter"]
+        elif row["Columna"] == 4:
+            # Columna 4 cae en la posición de ABONOS (= deposito).
+            deposito = deposito + row["Caracter"]
         elif row["Columna"] == 5:
             saldo = saldo + row["Caracter"]
     fila = {"Fecha": fecha, "Concepto": concepto, "Origen": origen, "Deposito": deposito, "Retiro": retiro, "Saldo": saldo, "Top": top["Top"].max()}
@@ -186,9 +194,23 @@ def eliminar_movimientos_no_deseados(filas):
             if row["Fecha"] == "FECHA" and contador_repeticion == 0:
                 filas = filas[filas["Top"] > row["Top"]]
                 contador_repeticion += 1
-            elif row["Fecha"] == "Estima" or row["Concepto"] == "BANCO INBURSA, S.A. INSTITUCION DE BANCA MULTIPLE, GR":
+            elif contador_repeticion == 0:
+                # Todavía no llegamos al encabezado real de la tabla (estamos
+                # en la carátula/resumen que puede compartir página con el
+                # detalle); no aplican los filtros de "fin de tabla" de abajo.
+                pass
+            elif row["Fecha"] != "" and not re.match(r"\w{3}\.\s*\d{2}", row["Fecha"]):
+                # Una fila de continuación real de un movimiento siempre tiene
+                # Fecha vacía (el texto cae fuera de la columna de fecha); una
+                # fila con Fecha no vacía que tampoco es "MES. DD" es el aviso
+                # legal / sello digital del CFDI, que se extiende por toda la
+                # página y por eso mancha esa columna. Corta desde ahí.
                 filas = filas[filas["Top"] < row["Top"]]
-            elif re.search("BALANCE INICIAL",row["Concepto"]):
+            elif len(row["Concepto"]) > 100:
+                # Igual que arriba, pero para el caso en que la fila cae
+                # completamente fuera de la columna de fecha.
+                filas = filas[filas["Top"] < row["Top"]]
+            elif re.search("BALANCE INICIAL",row["Concepto"]) and index in filas.index:
                 filas = filas.drop(index)
     return filas
 
@@ -198,7 +220,7 @@ def incluir_movimientos(df):
     df["Movimiento"] = 0
     contador_movimiento = 0
     for index, fila in df.iterrows():
-        if  re.match(r"\w{3} \d{2}", fila["Fecha"]):
+        if  re.match(r"\w{3}\.\s*\d{2}", fila["Fecha"]):
             contador_movimiento += 1 
         
         df.loc[index,"Movimiento"] = contador_movimiento

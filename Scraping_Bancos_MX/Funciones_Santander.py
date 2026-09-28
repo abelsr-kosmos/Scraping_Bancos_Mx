@@ -105,20 +105,24 @@ def extraer_movimientos_pagina(pagina,texto):
     return filas
 
 def agrupar_columnas(caracteres):
+    # Límites de columna (x1) calibrados contra estados reales: Fecha
+    # "DD-MES-AAAA" siempre termina en x1<=78.5; Folio+Descripcion vienen
+    # pegados sin espacio ("0000000COMISION...") así que se tratan como un
+    # solo campo (columna 2); Deposito/Retiro/Saldo son columnas justificadas
+    # a la derecha con ancho fijo (394-430 / 462-497 / 542-581 respectivamente
+    # en los estados usados para calibrar), con margen de sobra entre cada una.
     columnas = []
     for caracter in caracteres:
         coordenada = (caracter["x1"])
-        if coordenada <= 61 and coordenada >= 16:
+        if coordenada <= 80 and coordenada >= 16:
             columnas.append({"Caracter": caracter["text"], "Top": caracter["top"],"X":caracter["x1"],"Columna": 0})
-        elif coordenada <= 96  and coordenada > 68:
-            columnas.append({"Caracter": caracter["text"], "Top": caracter["top"],"X":caracter["x1"],"Columna": 1})
-        elif coordenada <= 326  and coordenada > 96:
+        elif coordenada <= 388  and coordenada > 80:
             columnas.append({"Caracter": caracter["text"], "Top": caracter["top"],"X":caracter["x1"],"Columna": 2})
-        elif coordenada <= 415  and coordenada > 326:
+        elif coordenada <= 440  and coordenada > 388:
             columnas.append({"Caracter": caracter["text"], "Top": caracter["top"],"X":caracter["x1"],"Columna": 3})
-        elif coordenada <= 495  and coordenada > 415:
+        elif coordenada <= 515  and coordenada > 440:
             columnas.append({"Caracter": caracter["text"], "Top": caracter["top"],"X":caracter["x1"],"Columna": 4})
-        elif coordenada <= 577  and coordenada > 495:
+        elif coordenada <= 590  and coordenada > 515:
             columnas.append({"Caracter": caracter["text"], "Top": caracter["top"],"X":caracter["x1"],"Columna": 5})
     columnas = pd.DataFrame(columnas)
     return columnas
@@ -172,10 +176,22 @@ def eliminar_movimientos_no_deseados(filas):
                 filas = filas[filas["Top"] < row["Top"]]
             elif row["Concepto"] == "TOTAL":
                 filas = filas[filas["Top"] < row["Top"]]
-                
+            elif "SALDOFINALDELPERIODO" in row["Concepto"] and "ANTERIOR" not in row["Concepto"]:
+                # Cierra la tabla de esta página ("SALDO FINAL DEL PERIODO:",
+                # el saldo de cierre, no el de apertura). Corta antes de esta
+                # fila para no arrastrar el pie de página / firma digital del
+                # CFDI hacia la descripción del último movimiento real.
+                filas = filas[filas["Top"] < row["Top"]]
+            elif len(row["Concepto"]) > 150:
+                # Bloque de sello/cadena digital del CFDI: una sola cadena
+                # larga sin espacios que no es texto de ningún movimiento.
+                filas = filas[filas["Top"] < row["Top"]]
+
     for index,row in filas.iterrows():
         if index > 0:
-            if row["Concepto"] == "SALDOFINALDELPERIODOANTERIOR":
+            if "SALDOFINALDELPERIODOANTERIOR" in row["Concepto"]:
+                # Saldo de apertura del periodo: no es un movimiento en sí,
+                # solo se descarta esta fila (las siguientes sí son reales).
                 filas = filas.drop(index)
     return filas
 

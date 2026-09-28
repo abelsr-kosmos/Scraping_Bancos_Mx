@@ -60,3 +60,4 @@ htmlcov/
 
 ## Project
 notebooks/
+benchmark/last_run.json

@@ -24,7 +24,7 @@
 ## Features
 
 - Extract transactions from PDF bank statements
-- Supports 16 Mexican banks
+- Supports 20 Mexican banks
 - Returns standardized pandas DataFrames
 - Easy-to-use API with consistent interface per bank
 
@@ -68,14 +68,22 @@ print(df.head())
 | Banjercito | `Scrap_Estado_Banjercito` |
 | Banorte | `Scrap_Estado_Banorte` |
 | BanRegio | `Scrap_Estado_BanRegio` |
+| Base (Banco BASE) | `Scrap_Estado_Base` |
 | BBVA | `Scrap_Estado_BBVA` |
 | HeyBanco | `Scrap_Estado_HeyBanco` |
 | HSBC | `ParserHSBC` (class) |
 | Inbursa | `Scrap_Estado_Inbursa` |
+| Intercam | `Scrap_Estado_Intercam` |
 | MercadoPago | `EstadoCuentaMovimientosExtractor` (class) |
+| Monex | `Scrap_Estado_Monex` |
+| Multiva | `Scrap_Estado_Multiva` |
 | Nu | `NuTableExtractor` (class) |
 | Santander | `Scrap_Estado_Santander` |
 | Scotiabank | `Scrap_Estado_Scotiabank` |
+
+> **Nota:** Monex e Intercam pueden tener limitaciones en cuentas con
+> múltiples divisas o múltiples cuentas ligadas en un mismo PDF — ver el
+> docstring de `Scrap_Estado_Monex`/`Scrap_Estado_Intercam` para el detalle.
 
 ## Usage Examples
 

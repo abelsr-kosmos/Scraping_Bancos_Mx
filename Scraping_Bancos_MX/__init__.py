@@ -23,6 +23,10 @@ from .Funciones_Nu import *
 from .Funciones_Bancoppel import *
 from .Funciones_Banjercito import *
 from .Funciones_Libranza_IMSS import *
+from .Funciones_Base import *
+from .Funciones_Intercam import *
+from .Funciones_Multiva import *
+from .Funciones_Monex import *
 
 from .base import BankStatementParser
 from .models import Movimiento, EstadoCuenta
@@ -44,6 +48,10 @@ from .parsers import (
     NuParser,
     BancoppelParser,
     LibranzaIMSSParser,
+    BaseParser,
+    IntercamParser,
+    MultivaParser,
+    MonexParser,
     PARSERS,
     get_parser,
 )
@@ -66,6 +74,10 @@ __all__ = [
     "BancoppelMovimientosExtractor",
     "Scrap_Estado_Banjercito",
     "Scrap_Libranza_IMSS",
+    "Scrap_Estado_Base",
+    "Scrap_Estado_Intercam",
+    "Scrap_Estado_Multiva",
+    "Scrap_Estado_Monex",
     # Interfaz unificada (opcional): modelos + clases parser por banco
     "BankStatementParser",
     "Movimiento",
@@ -87,6 +99,10 @@ __all__ = [
     "NuParser",
     "BancoppelParser",
     "LibranzaIMSSParser",
+    "BaseParser",
+    "IntercamParser",
+    "MultivaParser",
+    "MonexParser",
     "PARSERS",
     "get_parser",
 ]

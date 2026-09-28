@@ -33,6 +33,10 @@ from .Funciones_MercadoPago import EstadoCuentaMovimientosExtractor
 from .Funciones_Nu import NuTableExtractor
 from .Funciones_Bancoppel import BancoppelMovimientosExtractor
 from .Funciones_Libranza_IMSS import Scrap_Libranza_IMSS
+from .Funciones_Base import Scrap_Estado_Base
+from .Funciones_Intercam import Scrap_Estado_Intercam
+from .Funciones_Multiva import Scrap_Estado_Multiva
+from .Funciones_Monex import Scrap_Estado_Monex
 
 
 def _make_function_parser(banco: str, func) -> Type[BankStatementParser]:
@@ -62,17 +66,30 @@ HeyBancoParser = _make_function_parser("HeyBanco", Scrap_Estado_HeyBanco)
 InbursaParser = _make_function_parser("Inbursa", Scrap_Estado_Inbursa)
 SantanderParser = _make_function_parser("Santander", Scrap_Estado_Santander)
 ScotiabankParser = _make_function_parser("Scotiabank", Scrap_Estado_Scotiabank)
+BaseParser = _make_function_parser("Base", Scrap_Estado_Base)
+IntercamParser = _make_function_parser("Intercam", Scrap_Estado_Intercam)
+MultivaParser = _make_function_parser("Multiva", Scrap_Estado_Multiva)
+MonexParser = _make_function_parser("Monex", Scrap_Estado_Monex)
 
 
 class HSBCParser(BankStatementParser):
-    """Adaptador de ParserHSBC (requiere extraer el texto del PDF primero)."""
+    """Adaptador de ParserHSBC (requiere extraer el texto del PDF primero).
+
+    ParserHSBC.to_dataframe() regresa columnas propias (fecha, detalles,
+    retiros, abonos, saldo) en vez del esquema estándar; aquí se renombran
+    para que parse_validado()/to_estado_cuenta() funcionen igual que con
+    cualquier otro banco, sin tocar Funciones_HSBC.py (que sigue exportando
+    ParserHSBC con su forma original para quien ya la use directamente).
+    """
 
     banco = "HSBC"
 
     def parse(self, pdf_path: str):
         with pdfplumber.open(pdf_path) as pdf:
             texto = "\n".join(page.extract_text() or "" for page in pdf.pages)
-        return ParserHSBC(texto).to_dataframe()
+        df = ParserHSBC(texto).to_dataframe()
+        df = df.rename(columns={"detalles": "descripcion", "retiros": "retiro", "abonos": "deposito"})
+        return df[["fecha", "descripcion", "deposito", "retiro", "saldo"]]
 
 
 class MercadoPagoParser(BankStatementParser):
@@ -135,7 +152,15 @@ PARSERS: Dict[str, Type[BankStatementParser]] = {
     "MercadoPago": MercadoPagoParser,
     "Nu": NuParser,
     "Bancoppel": BancoppelParser,
-    "LibranzaIMSS": LibranzaIMSSParser,
+    # LibranzaIMSSParser NO se registra aquí a propósito: no es un estado de
+    # cuenta bancario (es una tabla de amortización con un esquema distinto),
+    # así que meterlo en este diccionario rompería cualquier código genérico
+    # que itere PARSERS/get_parser esperando el esquema estándar de los
+    # demás. Sigue disponible directo como Scraping_Bancos_MX.LibranzaIMSSParser.
+    "Base": BaseParser,
+    "Intercam": IntercamParser,
+    "Multiva": MultivaParser,
+    "Monex": MonexParser,
 }
 
 

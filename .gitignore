@@ -43,6 +43,7 @@ env/
 
 # PDF files (datos sensibles de bancos)
 *.pdf
+*.zip
 
 # OS
 .DS_Store

@@ -299,7 +299,7 @@ class TransactionsParser:
 
         return {
             "fecha": fecha,
-            "description": description,
+            "descripcion": description,
             "monto": montos[-2] if len(montos) > 1 else None,
             "saldo": montos[-1]
         }

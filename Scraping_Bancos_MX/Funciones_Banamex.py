@@ -1,8 +1,10 @@
 import re
+from typing import Optional
+
 import pdfplumber
 import pandas as pd
 
-def Scrap_Estado(ruta_archivo):
+def Scrap_Estado_Banamex(ruta_archivo):
     df = procesar_pdf(ruta_archivo)
     df.columns = [col.lower() for col in df.columns]
     df = df.dropna(subset=['retiro', 'deposito'], how='all')
@@ -280,9 +282,10 @@ class TransactionsParser:
         return splits
 
     # ---------- Paso 3 ----------
-    def _extract_transaction(self, block: str) -> dict:
+    def _extract_transaction(self, block: str) -> Optional[dict]:
         """
-        Extrae la información de un bloque y la devuelve como dict.
+        Extrae la información de un bloque y la devuelve como dict,
+        o None si el bloque no contiene ningún monto reconocible.
         """
         fecha_match = re.search(r'\d{2} \w{3}', block)
         if not fecha_match:
@@ -290,6 +293,8 @@ class TransactionsParser:
 
         fecha = fecha_match.group()
         montos = self.money_pattern.findall(block)
+        if not montos:
+            return None
 
         # Limpiar descripción
         description = block.replace(fecha, "")
@@ -317,12 +322,11 @@ class TransactionsParser:
         # Asignar signo a 'monto'
         saldo_val = 0.0
         for idx, row in df.iterrows():
-            if row['monto'] is None:
-                continue
-            if row['saldo'] >= saldo_val:
-                df.at[idx, 'monto'] = row['monto']    # Depósito
-            else:
-                df.at[idx, 'monto'] = -row['monto']   # Retiro
+            if row['monto'] is not None:
+                if row['saldo'] >= saldo_val:
+                    df.at[idx, 'monto'] = row['monto']    # Depósito
+                else:
+                    df.at[idx, 'monto'] = -row['monto']   # Retiro
             saldo_val = row['saldo']
 
         # Separar retiros y depósitos
@@ -331,7 +335,7 @@ class TransactionsParser:
         df = df.drop(columns=['monto'])
 
         # Orden final de columnas
-        df = df[['fecha', 'description', 'retiro', 'deposito', 'saldo']]
+        df = df[['fecha', 'descripcion', 'retiro', 'deposito', 'saldo']]
         return df
 
     # ---------- Paso 5 ----------
@@ -340,5 +344,5 @@ class TransactionsParser:
         Orquesta todo el flujo: recibe texto, devuelve DataFrame listo.
         """
         blocks = self._split_transactions(render)
-        transactions = [self._extract_transaction(b) for b in blocks]
+        transactions = [t for t in (self._extract_transaction(b) for b in blocks) if t is not None]
         return self._build_dataframe(transactions)

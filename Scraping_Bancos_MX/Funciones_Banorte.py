@@ -5,7 +5,7 @@ import pdfplumber
 import pandas as pd
 import time
 
-def Scrap_Estado(ruta_archivo):
+def Scrap_Estado_Banorte(ruta_archivo):
     estado = pdfplumber.open(ruta_archivo)
     tabla = analizar_estados(estado)
     tabla2 = analisis_movimientos(tabla)

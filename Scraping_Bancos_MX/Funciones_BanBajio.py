@@ -18,7 +18,7 @@ MARCADORES_FIN_MOVIMIENTOS = [
 RE_FECHA_CORTA = re.compile(r"\d{1,2}\ \w{3}")
 RE_REFERENCIA = re.compile(r"\b\d{7,}\b")
 
-def Scrap_Estado(ruta_archivo):
+def Scrap_Estado_BanBajio(ruta_archivo):
     with pdfplumber.open(ruta_archivo) as estado:
         tabla = analizar_estado(estado)
     tabla = analisis_movimientos(tabla)

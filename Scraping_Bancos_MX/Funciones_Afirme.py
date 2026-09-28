@@ -2,7 +2,7 @@ import pandas as pd
 import re
 import pdfplumber
 
-def Scrap_Estado(ruta_archivo):
+def Scrap_Estado_Afirme(ruta_archivo):
     estado = pdfplumber.open(ruta_archivo)
     tabla = analizar_estados(estado)
     tabla2 = analisis_movimientos(tabla)
@@ -19,6 +19,13 @@ def analisis_movimientos(df):
 
 def normalizar_tabla(df):
     df = df.drop('Movimiento', axis=1)
+    df.columns = [col.lower() for col in df.columns]
+    df = df.rename(columns={'concepto': 'descripcion'})
+    for col in ('deposito', 'retiro', 'saldo'):
+        df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', '', regex=False), errors='coerce')
+    columnas_core = ['fecha', 'descripcion', 'deposito', 'retiro', 'saldo']
+    columnas_extra = [c for c in df.columns if c not in columnas_core]
+    df = df[columnas_core + columnas_extra]
     return df
 
 def analisis_concepto(df):
@@ -27,14 +34,14 @@ def analisis_concepto(df):
         if re.search("CONCEPTO:",row["Concepto"]):
             concepto = row["Concepto"].split("CONCEPTO:")[1]
             concepto = concepto.split("|")[0]
-            if re.search("|HORA",row["Concepto"]):
+            if "|HORA" in row["Concepto"]:
                 concepto = concepto.split("|HORA:")[0]
             try:
                 concepto = concepto.replace("|","")
             except:
                 pass
             df.loc[index,"ConceptoMovimiento"] = concepto
-        elif re.search(" CON|CEPTO:",row["Concepto"]):
+        elif " CON|CEPTO:" in row["Concepto"]:
             concepto = row["Concepto"].split(" CON|CEPTO:")[1]
             df.loc[index,"ConceptoMovimiento"] = concepto
         else:

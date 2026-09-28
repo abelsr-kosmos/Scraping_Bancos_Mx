@@ -130,7 +130,7 @@ def _extraer_anio_mes(pdf) -> Tuple[str, str]:
     return "", ""
 
 
-def Scrap_Estado(ruta_archivo: str) -> pd.DataFrame:
+def Scrap_Estado_Banjercito(ruta_archivo: str) -> pd.DataFrame:
     """
     Extrae la tabla de movimientos de un estado de cuenta de Banjercito.
 
@@ -142,12 +142,13 @@ def Scrap_Estado(ruta_archivo: str) -> pd.DataFrame:
     Returns
     -------
     pd.DataFrame
-        DataFrame con columnas: fecha, descripcion, retiros, depositos, saldo
+        DataFrame con columnas: fecha, descripcion, retiro, deposito, saldo
     """
     all_movements: list = []
 
     with pdfplumber.open(ruta_archivo) as pdf:
         anio, _mes_corte = _extraer_anio_mes(pdf)
+        tabla_iniciada = False
 
         for page in pdf.pages:
             chars = page.chars
@@ -157,7 +158,14 @@ def Scrap_Estado(ruta_archivo: str) -> pd.DataFrame:
             lines = _group_lines(chars)
             data_start = _find_data_start_index(lines)
             if data_start == -1:
-                continue
+                if not tabla_iniciada:
+                    # Todavía no llegamos a la tabla de movimientos (portada, resumen, etc.)
+                    continue
+                # Página de continuación: no repite el encabezado, pero ya
+                # sabemos que la tabla empezó, así que procesamos desde el inicio.
+                data_start = 0
+            else:
+                tabla_iniciada = True
 
             current_movement = None
 
@@ -218,7 +226,7 @@ def Scrap_Estado(ruta_archivo: str) -> pd.DataFrame:
                 all_movements.append(current_movement)
 
     if not all_movements:
-        return pd.DataFrame(columns=["fecha", "descripcion", "retiros", "depositos", "saldo"])
+        return pd.DataFrame(columns=["fecha", "descripcion", "retiro", "deposito", "saldo"])
 
     df = pd.DataFrame(all_movements)
 
@@ -242,11 +250,11 @@ def Scrap_Estado(ruta_archivo: str) -> pd.DataFrame:
     )
 
     # Parsear montos numéricos
-    df["retiros"]   = df["cargos"].apply(_parse_monto)
-    df["depositos"] = df["abonos"].apply(_parse_monto)
+    df["retiro"]   = df["cargos"].apply(_parse_monto)
+    df["deposito"] = df["abonos"].apply(_parse_monto)
     df["saldo"]     = df["saldo"].apply(_parse_monto)
     
     # Quita filas donde no haya retiro ni depósito (ej. filas de continuación sin monto)
-    df = df[~((df["retiros"].isna() | (df["retiros"] == 0)) & (df["depositos"].isna() | (df["depositos"] == 0)))]
+    df = df[~((df["retiro"].isna() | (df["retiro"] == 0)) & (df["deposito"].isna() | (df["deposito"] == 0)))]
 
-    return df[["fecha", "descripcion", "retiros", "depositos", "saldo"]].copy()
+    return df[["fecha", "descripcion", "retiro", "deposito", "saldo"]].copy()

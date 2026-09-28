@@ -2,8 +2,9 @@ import re
 import pdfplumber
 import pandas as pd
 
-def Scrap_Estado(ruta_archivo):
+def Scrap_Estado_Azteca(ruta_archivo):
     df = procesar_pdf(ruta_archivo)
+    df.columns = [col.lower() for col in df.columns]
     return df
 
 
@@ -35,11 +36,10 @@ def parse_linea_movimiento(linea):
     # patron para extraer el monto algo similar a (+) $50,000.00
     pattern = r'\(\s*(?P<sign>[+-])\s*\)\s*\$\s*(?P<amount>(?:\d{1,3}(?:,\d{3})*|\d+)(?:\.\d{2})?)'
     match = re.search(pattern, linea)
-    
-    # Quitael match de la linea
-    linea = linea.replace(match.group(0), '')
-    
+
     if match:
+        # Quita el match de la linea
+        linea = linea.replace(match.group(0), '')
         sign = match.group('sign')
         amount = match.group('amount')
         amount = amount.replace(',', '')
@@ -48,7 +48,7 @@ def parse_linea_movimiento(linea):
             monto = amount
         else:
             monto = -amount
-    else: 
+    else:
         monto = None
     
     return fecha, monto, linea

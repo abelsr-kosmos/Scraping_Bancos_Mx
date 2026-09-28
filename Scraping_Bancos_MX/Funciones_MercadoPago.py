@@ -59,7 +59,7 @@ class EstadoCuentaMovimientosExtractor:
     def extract_movimientos(self, all_text: List[str]) -> List[Dict[str, Optional[str]]]:
         """
         Extrae movimientos como lista de dicts:
-        {'date','time','description','money'}
+        {'date','time','descripcion','money'}
         """
         movimientos: List[Dict[str, Optional[str]]] = []
 
@@ -80,7 +80,7 @@ class EstadoCuentaMovimientosExtractor:
                 movimientos.append({
                     "date": d_match.group(),
                     "time": time_m.group() if time_m else None,
-                    "description": self._clean_description(block),
+                    "descripcion": self._clean_description(block),
                     "money": money_m.group() if money_m else None,
                 })
 
@@ -122,8 +122,8 @@ class EstadoCuentaMovimientosExtractor:
         )
 
         # Selección y rename final
-        df = df[["date", "time", "description", "deposito", "retiro"]].copy()
-        df.rename(columns={"date": "fecha", "time": "hora", "description": "descripcion"}, inplace=True)
+        df = df[["date", "time", "descripcion", "deposito", "retiro"]].copy()
+        df.rename(columns={"date": "fecha", "time": "hora"}, inplace=True)
         # df with columns: fecha, hora, descripcion, deposito, retiro
         df['saldo'] = None
         df = df[['fecha', 'descripcion', 'deposito', 'retiro', 'saldo']]

@@ -16,7 +16,7 @@ RE_FECHA = re.compile(r"\d{2}")
 RE_NOSPACE = re.compile(r"\s+")
 TABLE_SENTINEL = "DIACONCEPTOCARGOSABONOSSALDO"
 
-def Scrap_Estado(ruta_archivo):
+def Scrap_Estado_BanRegio(ruta_archivo):
     with pdfplumber.open(ruta_archivo) as estado:
         tabla = analizar_estados(estado)
     tabla = analisis_movimientos(tabla)

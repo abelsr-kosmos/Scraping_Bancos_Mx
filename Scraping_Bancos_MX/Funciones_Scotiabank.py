@@ -7,7 +7,7 @@ import pandas as pd
 
 ## Función del repo original ##
 
-def Scrap_Estado(ruta_archivo):
+def Scrap_Estado_Scotiabank(ruta_archivo):
     estado = pdfplumber.open(ruta_archivo)
     tabla = analizar_estados(estado)
     tabla2 = analisis_movimientos(tabla)

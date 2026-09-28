@@ -5,7 +5,7 @@ from typing import Any, Dict, List
 import pdfplumber
 import pandas as pd
 
-def Scrap_Estado(ruta_archivo):
+def Scrap_Estado_BBVA(ruta_archivo):
     estado = pdfplumber.open(ruta_archivo)
     tabla = analizar_estados(estado)
     tabla2 = analisis_movimientos(tabla)
@@ -165,14 +165,18 @@ def is_number(s):
         return False
     
 def correccion_abono_cargo(df_movimientos):
+    # Montos grandes (6+ dígitos) pueden partirse entre las columnas Cargos y
+    # Abono porque su primer dígito cae justo en el límite entre ambas. Si
+    # ambas columnas tienen un número en la misma línea, es ese mismo monto
+    # partido (una línea es cargo o abono, nunca ambos), así que se reúnen.
     for index,fila in df_movimientos.iterrows(): #[+-]?([0-9]*[.])?[0-9]+
         abono_temp = fila["Abono"].replace(",","")
         abono_temp = abono_temp.replace(" ","")
         cargo_temp = fila["Cargo"].replace(",","")
         cargo_temp = cargo_temp.replace(" ","")
         if is_number(abono_temp) and is_number(cargo_temp):
-                fila["Abono"] = str(fila["Cargo"]) + str(fila["Abono"])
-                fila["Cargo"] = ""
+                df_movimientos.at[index, "Abono"] = str(fila["Cargo"]) + str(fila["Abono"])
+                df_movimientos.at[index, "Cargo"] = ""
     return df_movimientos
 
 def unificar_tabla(df):

@@ -106,10 +106,9 @@ class BancoppelMovimientosExtractor:
         
         saldo_inicial = movimientos_df['saldo'].iloc[0]
         
-        # Iteramos para ajustar el signo de 'monto' según si el saldo subió o bajó
-        # Prototipo: saldo baja -> monto positivo (Deposit??). Saldo sube -> monto negativo.
-        # Se implementa tal cual el prototipo.
-        
+        # Iteramos para ajustar el signo de 'monto' según si el saldo subió o bajó:
+        # saldo baja -> retiro (monto negativo). Saldo sube o igual -> depósito (monto positivo).
+
         for idx, row in movimientos_df.iterrows():
             if idx == 0:
                 continue
@@ -119,11 +118,9 @@ class BancoppelMovimientosExtractor:
             
             # Comparación con el saldo anterior (del iterador)
             if saldo_actual - saldo_inicial < 0:
-                pass 
-            else:
-                # Si el saldo subió (o igual), invertimos el signo del monto
+                # El saldo bajó -> es un retiro, monto negativo
                 row['monto'] = -monto
-                
+
             # Actualizamos en el DF
             movimientos_df.at[idx, 'monto'] = row['monto']
             

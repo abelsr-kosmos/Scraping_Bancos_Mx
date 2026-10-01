@@ -24,11 +24,6 @@ from ._normalizacion import montos_cero
 MONEY_RE = re.compile(r"\d{1,3}(?:,\d{3})*\.\d{2}")
 DATE_RE = re.compile(r"\b(\d{1,2})\s*/\s*([A-Za-zÁÉÍÓÚáéíóú]{3})\b")
 
-MESES = {
-    "ENE": "01", "FEB": "02", "MAR": "03", "ABR": "04", "MAY": "05", "JUN": "06",
-    "JUL": "07", "AGO": "08", "SEP": "09", "OCT": "10", "NOV": "11", "DIC": "12",
-}
-
 # Líneas de encabezado/pie que se repiten en cada página y no son parte de
 # la descripción de ningún movimiento.
 LINEAS_A_IGNORAR = [
@@ -44,13 +39,16 @@ LINEAS_A_IGNORAR = [
 
 
 def _extraer_anio_periodo(pdf) -> str:
-    """Extrae el año del periodo declarado en la carátula (página 1)."""
-    texto = pdf.pages[0].extract_text() or ""
-    match = re.search(r"PERIODO:.*", texto)
-    if match:
-        anios = re.findall(r"\d{4}", match.group())
-        if anios:
-            return anios[0]
+    """Extrae el año del periodo declarado en la carátula. Algunos estados
+    traen la portada como imagen (sin texto), así que se busca en las primeras
+    páginas en vez de solo en la primera."""
+    for page in pdf.pages[:5]:
+        texto = page.extract_text() or ""
+        match = re.search(r"PERIODO:.*", texto)
+        if match:
+            anios = re.findall(r"\d{4}", match.group())
+            if anios:
+                return anios[0]
     return ""
 
 
@@ -109,6 +107,10 @@ def _es_linea_de_montos(line: str) -> list[str]:
     return montos if len(montos) >= 6 else []
 
 
+# La descripción completa de Monex es muy larga; solo se conservan los primeros caracteres.
+DESCRIPCION_MAX_CHARS = 30
+
+
 @montos_cero
 def Scrap_Estado_Monex(ruta_archivo: str) -> pd.DataFrame:
     """
@@ -161,13 +163,13 @@ def Scrap_Estado_Monex(ruta_archivo: str) -> pd.DataFrame:
             continue
 
         dia, mes_abbr = fecha_match.group(1), fecha_match.group(2).upper()
-        mes = MESES.get(mes_abbr, "01")
-        fecha = f"{dia.zfill(2)}/{mes}/{anio}"
+        # Mismo formato que BBVA: dd/MMM/aaaa (p. ej. 01/JUN/2026)
+        fecha = f"{dia.zfill(2)}/{mes_abbr}" + (f"/{anio}" if anio else "")
 
         # Limpia la línea de montos (deja solo el texto que no es fecha/monto)
         # antes de unir todo el bloque como descripción.
         buffer[-1] = MONEY_RE.sub("", DATE_RE.sub("", line))
-        descripcion = re.sub(r"\s+", " ", " ".join(buffer)).strip()
+        descripcion = re.sub(r"\s+", " ", " ".join(buffer)).strip()[:DESCRIPCION_MAX_CHARS].rstrip()
 
         movimientos.append({
             "fecha": fecha,

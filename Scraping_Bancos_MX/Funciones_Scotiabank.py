@@ -75,17 +75,20 @@ def _extraer_periodo(estado) -> Optional[Tuple[int, int, int, int]]:
 
 
 def _fecha_con_anio(fecha, periodo) -> str:
-    """Normaliza 'dd MMM' (sin espacios sobrantes) y le agrega el año del
+    """Normaliza 'dd MMM' al formato de BBVA 'dd/MMM/aaaa' usando el año del
     periodo; si el periodo cruza de año, los meses >= al de inicio toman el
-    año de inicio y el resto el de fin."""
+    año de inicio y el resto el de fin. Sin periodo regresa 'dd/MMM'."""
     f = re.sub(r"\s+", " ", str(fecha)).strip()
     m = re.match(r"^(\d{2}) ([A-ZÁÉÍÓÚÑ]{3})$", f, re.IGNORECASE)
-    if not m or periodo is None or m.group(2).upper() not in _MESES:
+    if not m or m.group(2).upper() not in _MESES:
         return f
+    dia, mes_txt = m.group(1), m.group(2).upper()
+    if periodo is None:
+        return f"{dia}/{mes_txt}"
     mes_ini, anio_ini, _, anio_fin = periodo
-    mes = _MESES.index(m.group(2).upper()) + 1
+    mes = _MESES.index(mes_txt) + 1
     anio = anio_ini if (anio_ini == anio_fin or mes >= mes_ini) else anio_fin
-    return f"{m.group(1)} {m.group(2).upper()} {anio}"
+    return f"{dia}/{mes_txt}/{anio}"
 
 
 def agrupar_columnas(caracteres) -> pd.DataFrame:

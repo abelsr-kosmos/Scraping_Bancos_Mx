@@ -35,7 +35,25 @@ def Scrap_Estado_Scotiabank(ruta_archivo):
 
 _MESES = ['ENE', 'FEB', 'MAR', 'ABR', 'MAY', 'JUN', 'JUL', 'AGO', 'SEP', 'OCT', 'NOV', 'DIC']
 
-_PERIODO_RE = re.compile(r"Periodo\s*\d{2}-([A-Z]{3})-(\d{2})\s*/\s*\d{2}-([A-Z]{3})-(\d{2})")
+# Tolera espacios (OCR) y años de 2 o 4 dígitos: 'Periodo 02-JUN-25/30-JUN-25'
+_PERIODO_RE = re.compile(
+    r"Periodo\s*\d{1,2}\s*-\s*([A-Z]{3})\s*-\s*(\d{2,4})\s*/\s*\d{1,2}\s*-\s*([A-Z]{3})\s*-\s*(\d{2,4})",
+    re.IGNORECASE,
+)
+
+
+def _periodo_desde_texto(texto: str) -> Optional[Tuple[int, int, int, int]]:
+    """Regresa (mes_inicio, anio_inicio, mes_fin, anio_fin) a partir del
+    encabezado 'Periodo dd-MMM-aa/dd-MMM-aa' dentro de `texto`, o None."""
+    m = _PERIODO_RE.search(texto.replace("\n", " "))
+    if not m:
+        return None
+    mes_ini, mes_fin = m.group(1).upper(), m.group(3).upper()
+    if mes_ini not in _MESES or mes_fin not in _MESES:
+        return None
+    anio = lambda a: int(a) if len(a) == 4 else 2000 + int(a)
+    return (_MESES.index(mes_ini) + 1, anio(m.group(2)),
+            _MESES.index(mes_fin) + 1, anio(m.group(4)))
 
 
 def _limpiar_descripcion(concepto, origen) -> str:
@@ -50,11 +68,9 @@ def _extraer_periodo(estado) -> Optional[Tuple[int, int, int, int]]:
     """Regresa (mes_inicio, anio_inicio, mes_fin, anio_fin) del encabezado
     'Periodo 02-JUN-25/30-JUN-25', o None si no se encuentra."""
     for pagina in estado.pages:
-        texto = pagina.extract_text() or ""
-        m = _PERIODO_RE.search(texto.replace("\n", " "))
-        if m and m.group(1) in _MESES and m.group(3) in _MESES:
-            return (_MESES.index(m.group(1)) + 1, 2000 + int(m.group(2)),
-                    _MESES.index(m.group(3)) + 1, 2000 + int(m.group(4)))
+        periodo = _periodo_desde_texto(pagina.extract_text() or "")
+        if periodo:
+            return periodo
     return None
 
 
@@ -439,9 +455,15 @@ class ScotiabankMovementExtractor:
         # Prepara OCR aplanado
         self.ocr_df = self._flatten_doctr_ocr(self.doctr_ocr)
 
+        # Periodo del estado de cuenta (para agregar el año a las fechas):
+        # primero del texto renderizado y, si no aparece, de las palabras del OCR
+        self.periodo = _periodo_desde_texto(self.render_text)
+        if self.periodo is None and not self.ocr_df.empty:
+            self.periodo = _periodo_desde_texto(" ".join(map(str, self.ocr_df["word"])))
+
     # ---------- API pública ----------
-    def parse(self) -> pd.DataFrame:
-        """Devuelve un DataFrame con columnas: date, text, deposito, retiro, saldo."""
+    def extract(self) -> pd.DataFrame:
+        """Devuelve un DataFrame con columnas: fecha, descripcion, deposito, retiro, saldo."""
         date_matches = list(self._date_re.finditer(self.render_text))
         rows = []
 
@@ -468,24 +490,39 @@ class ScotiabankMovementExtractor:
             deposito, retiro = None, None
             if geom is not None:
                 x_mean = (geom[0] + geom[2]) / 2.0  # (xmin + xmax)/2
-                # Clasificación por posición horizontal
+                # Clasificación por posición horizontal; el otro lado queda en 0
                 if x_mean < self.x_threshold:
-                    deposito = monto
+                    deposito, retiro = monto, 0.0
                 else:
-                    retiro = monto
+                    deposito, retiro = 0.0, monto
             # Si no hubo geometría, dejamos ambos en None (o podrías agregar una heurística alternativa)
 
             rows.append({
-                "date": m.group(1),
-                "text": text_block,
+                "fecha": _fecha_con_anio(m.group(1), self.periodo),
+                "descripcion": self._clean_description(text_block, amounts),
                 "deposito": deposito,
                 "retiro": retiro,
                 "saldo": saldo,
             })
 
-        return pd.DataFrame(rows)
+        return pd.DataFrame(rows, columns=["fecha", "descripcion", "deposito", "retiro", "saldo"])
+
+    @classmethod
+    def parse(cls, text: str, ocr: dict | list, **kwargs) -> pd.DataFrame:
+        """
+        INTERFAZ PRINCIPAL ► Pasa solo text y ocr, devuelve el DataFrame listo
+        (misma interfaz que BBVAExtractor.parse).
+        """
+        return cls(text, ocr, **kwargs).extract()
 
     # ---------- Utilidades internas ----------
+    @staticmethod
+    def _clean_description(text_block: str, amounts: List[str]) -> str:
+        """Quita los montos (monto y saldo) del texto y colapsa espacios."""
+        for amount in amounts:
+            text_block = text_block.replace(amount, "", 1)
+        return re.sub(r"\s+", " ", text_block).strip()
+
     @staticmethod
     def _flatten_doctr_ocr(doctr_ocr: dict | list) -> pd.DataFrame:
         """

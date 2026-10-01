@@ -3,7 +3,9 @@ from typing import Optional
 
 import pdfplumber
 import pandas as pd
+from ._normalizacion import montos_cero
 
+@montos_cero
 def Scrap_Estado_Banamex(ruta_archivo):
     """
     Extrae la tabla de movimientos de un estado de cuenta de Banamex.

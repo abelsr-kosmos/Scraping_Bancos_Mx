@@ -3,6 +3,7 @@ from typing import Dict, List, Optional, Tuple
 
 import pdfplumber
 import pandas as pd
+from ._normalizacion import montos_cero
 
 
 # Intercam Banco emite (al menos) dos plantillas de estado de cuenta para el
@@ -369,6 +370,7 @@ def _detectar_plantilla(texto: str) -> str:
     return "cash_management"
 
 
+@montos_cero
 def Scrap_Estado_Intercam(ruta_archivo: str) -> pd.DataFrame:
     """
     Extrae la tabla de movimientos de un estado de cuenta de Intercam Banco.

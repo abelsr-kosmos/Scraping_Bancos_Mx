@@ -19,6 +19,7 @@ import re
 
 import pdfplumber
 import pandas as pd
+from ._normalizacion import montos_cero
 
 MONEY_RE = re.compile(r"\d{1,3}(?:,\d{3})*\.\d{2}")
 DATE_RE = re.compile(r"\b(\d{1,2})\s*/\s*([A-Za-zÁÉÍÓÚáéíóú]{3})\b")
@@ -108,6 +109,7 @@ def _es_linea_de_montos(line: str) -> list[str]:
     return montos if len(montos) >= 6 else []
 
 
+@montos_cero
 def Scrap_Estado_Monex(ruta_archivo: str) -> pd.DataFrame:
     """
     Extrae la tabla de movimientos de un estado de cuenta de Monex.

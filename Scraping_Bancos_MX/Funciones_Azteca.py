@@ -1,7 +1,9 @@
 import re
 import pdfplumber
 import pandas as pd
+from ._normalizacion import montos_cero
 
+@montos_cero
 def Scrap_Estado_Azteca(ruta_archivo):
     df = procesar_pdf(ruta_archivo)
     df.columns = [col.lower() for col in df.columns]

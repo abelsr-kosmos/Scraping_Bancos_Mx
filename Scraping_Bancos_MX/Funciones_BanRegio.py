@@ -3,6 +3,7 @@ import re
 import pdfplumber
 import numpy as np
 import pandas as pd
+from ._normalizacion import montos_cero
 
 RE_SPEI = re.compile(r"SPEI")
 RE_TRA_INT = re.compile(r"TRA|INT")
@@ -16,6 +17,7 @@ RE_FECHA = re.compile(r"\d{2}")
 RE_NOSPACE = re.compile(r"\s+")
 TABLE_SENTINEL = "DIACONCEPTOCARGOSABONOSSALDO"
 
+@montos_cero
 def Scrap_Estado_BanRegio(ruta_archivo):
     with pdfplumber.open(ruta_archivo) as estado:
         tabla = analizar_estados(estado)

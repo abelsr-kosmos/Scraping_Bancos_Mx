@@ -2,8 +2,9 @@ import pandas as pd
 import re
 import pdfplumber
 
-from ._normalizacion import normalizar_columnas_estandar
+from ._normalizacion import normalizar_columnas_estandar, montos_cero
 
+@montos_cero
 def Scrap_Estado_HeyBanco(ruta_archivo):
     estado = pdfplumber.open(ruta_archivo)
     tabla = analizar_estados(estado)

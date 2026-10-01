@@ -3,6 +3,7 @@ from typing import Tuple, Optional
 
 import pdfplumber
 import pandas as pd
+from ._normalizacion import montos_cero
 
 
 # Límites de columnas del PDF de Banjercito (x0, x1) obtenidos de los
@@ -130,6 +131,7 @@ def _extraer_anio_mes(pdf) -> Tuple[str, str]:
     return "", ""
 
 
+@montos_cero
 def Scrap_Estado_Banjercito(ruta_archivo: str) -> pd.DataFrame:
     """
     Extrae la tabla de movimientos de un estado de cuenta de Banjercito.

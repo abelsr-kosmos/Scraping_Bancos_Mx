@@ -3,6 +3,7 @@ import logging
 from dataclasses import dataclass, asdict
 from typing import List, Dict, Optional, Pattern
 import pandas as pd
+from ._normalizacion import montos_cero
 
 @dataclass
 class MovimientoHSBC:
@@ -34,6 +35,7 @@ class ParserHSBC:
         parts = re.split(self.P3, section)
         return [p.strip() for p in parts if p and p.strip()]
 
+    @montos_cero
     def to_dataframe(self) -> pd.DataFrame:
         sec = self.clean_section()
         bloques = self.split_movimientos(sec)

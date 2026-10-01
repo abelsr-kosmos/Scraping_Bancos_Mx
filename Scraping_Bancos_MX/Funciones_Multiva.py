@@ -2,6 +2,7 @@ import re
 
 import pdfplumber
 import pandas as pd
+from ._normalizacion import montos_cero
 
 MESES = {
     "ENE": 1, "FEB": 2, "MAR": 3, "ABR": 4, "MAY": 5, "JUN": 6,
@@ -110,6 +111,7 @@ def _procesar_pagina(lineas, anio_actual, mes_actual, dia_anterior):
     return movimientos, anio_actual, mes_actual, dia_anterior
 
 
+@montos_cero
 def Scrap_Estado_Multiva(ruta_archivo: str) -> pd.DataFrame:
     """
     Extrae la tabla de movimientos de un estado de cuenta de Banco Multiva.

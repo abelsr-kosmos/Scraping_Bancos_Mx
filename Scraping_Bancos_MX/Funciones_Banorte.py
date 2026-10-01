@@ -4,7 +4,9 @@ from typing import List, Tuple, Optional
 import pdfplumber
 import pandas as pd
 import time
+from ._normalizacion import montos_cero
 
+@montos_cero
 def Scrap_Estado_Banorte(ruta_archivo):
     estado = pdfplumber.open(ruta_archivo)
     tabla = analizar_estados(estado)

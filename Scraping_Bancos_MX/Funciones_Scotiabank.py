@@ -4,9 +4,11 @@ from typing import List, Optional, Tuple
 
 import pdfplumber
 import pandas as pd
+from ._normalizacion import montos_cero
 
 ## Función del repo original ##
 
+@montos_cero
 def Scrap_Estado_Scotiabank(ruta_archivo):
     estado = pdfplumber.open(ruta_archivo)
     tabla = analizar_estados(estado)

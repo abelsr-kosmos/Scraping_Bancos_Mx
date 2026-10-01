@@ -4,7 +4,9 @@ from typing import Any, Dict, List
 
 import pdfplumber
 import pandas as pd
+from ._normalizacion import montos_cero
 
+@montos_cero
 def Scrap_Estado_BBVA(ruta_archivo):
     estado = pdfplumber.open(ruta_archivo)
     tabla = analizar_estados(estado)
@@ -238,9 +240,9 @@ def incluir_anio(df,anio_inicio,campo_fecha):
             for i in range(0,df.shape[0]):
                 operacion =re.findall(r"DIC",df.iloc[i,campo_fecha])
                 if(operacion):
-                    df.iloc[i,campo_fecha] += str(anio_inicio)
+                    df.iloc[i,campo_fecha] += "/" + str(anio_inicio)
                 else:
-                    df.iloc[i,campo_fecha] += str(int(anio_inicio)+1)
+                    df.iloc[i,campo_fecha] += "/" + str(int(anio_inicio)+1)
         else:
             for i in range(0,df.shape[0]):
                 df.iloc[i,campo_fecha] += "/" + str(int(anio_inicio))

@@ -2,6 +2,7 @@ import re
 
 import pdfplumber
 import pandas as pd
+from ._normalizacion import montos_cero
 
 # Una línea de movimiento empieza con "dd/mm/aaaa" seguido del resto de la
 # fila (el concepto puede seguir envolviendo varias líneas antes y/o después
@@ -12,6 +13,7 @@ MONTO_RE = re.compile(r'\d{1,3}(?:,\d{3})*\.\d{2}')
 STOP_MARKER = "[SALDO INICIAL DE"
 
 
+@montos_cero
 def Scrap_Estado_Base(ruta_archivo: str) -> pd.DataFrame:
     """
     Extrae la tabla de movimientos de un estado de cuenta de Banco BASE.

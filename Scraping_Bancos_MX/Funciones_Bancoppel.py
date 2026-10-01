@@ -4,6 +4,7 @@ from typing import List, Dict, Optional, Tuple
 
 import pdfplumber
 import pandas as pd
+from ._normalizacion import montos_cero
 
 
 @dataclass
@@ -137,6 +138,7 @@ class BancoppelMovimientosExtractor:
         
         return movimientos_df[['fecha', 'descripcion', 'retiro', 'deposito', 'saldo']]
 
+    @montos_cero
     def run(self, pdf_path: str) -> pd.DataFrame:
         """Ejecuta el pipeline completo."""
         all_text = self.read_pdf_text(pdf_path)

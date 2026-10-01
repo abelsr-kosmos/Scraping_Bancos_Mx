@@ -5,8 +5,9 @@ from typing import List, Dict, Optional
 import pdfplumber
 import pandas as pd
 
-from ._normalizacion import normalizar_columnas_estandar
+from ._normalizacion import normalizar_columnas_estandar, montos_cero
 
+@montos_cero
 def Scrap_Estado_Inbursa(ruta_archivo):
     estado = pdfplumber.open(ruta_archivo)
     tabla = analizar_estados(estado)

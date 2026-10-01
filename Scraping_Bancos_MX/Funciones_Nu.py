@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional, Pattern, Union
 
 import pdfplumber
 import pandas as pd
+from ._normalizacion import montos_cero
 
 
 @dataclass
@@ -133,6 +134,7 @@ class NuTableExtractor:
         except ValueError:
             return None
 
+    @montos_cero
     def to_dataframe(self, pdf_path: str) -> pd.DataFrame:
         movimientos = self.extract_movements(pdf_path)
 

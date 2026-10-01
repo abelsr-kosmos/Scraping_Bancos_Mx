@@ -1,6 +1,7 @@
 import pandas as pd
 import re
 import pdfplumber
+from ._normalizacion import montos_cero
 
 MARCADORES_CORTE_TEXTO = ["SALDO TOTAL*", "TOTAL DE MOVIMIENTOS EN EL PERIODO", "RESUMEN DEL PERIODO"]
 MARCADORES_FIN_MOVIMIENTOS = [
@@ -25,6 +26,7 @@ def _buscar_anio_periodo(texto: str) -> str | None:
     match = RE_ANIO_PERIODO.search(texto)
     return match.group(1) if match else None
 
+@montos_cero
 def Scrap_Estado_BanBajio(ruta_archivo):
     with pdfplumber.open(ruta_archivo) as estado:
         tabla = analizar_estado(estado)

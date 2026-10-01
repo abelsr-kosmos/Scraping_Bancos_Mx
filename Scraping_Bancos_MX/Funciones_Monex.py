@@ -108,7 +108,7 @@ def _es_linea_de_montos(line: str) -> list[str]:
 
 
 # La descripción completa de Monex es muy larga; solo se conservan los primeros caracteres.
-DESCRIPCION_MAX_CHARS = 30
+DESCRIPCION_MAX_CHARS = 150
 
 
 @montos_cero

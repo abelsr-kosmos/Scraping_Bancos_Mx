@@ -12,7 +12,11 @@ def Scrap_Estado_Scotiabank(ruta_archivo):
     tabla = analizar_estados(estado)
     tabla2 = analisis_movimientos(tabla)
     tabla2.columns = tabla2.columns.str.lower()
-    tabla2['concepto'] = tabla2['concepto'] + tabla2['origen']
+    tabla2['concepto'] = [
+        _limpiar_descripcion(c, o) for c, o in zip(tabla2['concepto'], tabla2['origen'])
+    ]
+    periodo = _extraer_periodo(estado)
+    tabla2['fecha'] = tabla2['fecha'].map(lambda f: _fecha_con_anio(f, periodo))
     tabla2 = tabla2[["fecha", "concepto", "deposito", "retiro", "saldo"]]
     tabla2 = tabla2.rename(columns={"concepto": "descripcion"})
     try:
@@ -28,6 +32,45 @@ def Scrap_Estado_Scotiabank(ruta_archivo):
     except:
         print("Error al convertir saldo a numérico")
     return tabla2
+
+_MESES = ['ENE', 'FEB', 'MAR', 'ABR', 'MAY', 'JUN', 'JUL', 'AGO', 'SEP', 'OCT', 'NOV', 'DIC']
+
+_PERIODO_RE = re.compile(r"Periodo\s*\d{2}-([A-Z]{3})-(\d{2})\s*/\s*\d{2}-([A-Z]{3})-(\d{2})")
+
+
+def _limpiar_descripcion(concepto, origen) -> str:
+    """Une las líneas del concepto y la referencia de origen con ' | ',
+    colapsando espacios y sin separadores vacíos al inicio/final."""
+    partes = [p for p in str(concepto).split("|")] + [str(origen)]
+    partes = [re.sub(r"\s+", " ", p).strip() for p in partes]
+    return " | ".join(p for p in partes if p)
+
+
+def _extraer_periodo(estado) -> Optional[Tuple[int, int, int, int]]:
+    """Regresa (mes_inicio, anio_inicio, mes_fin, anio_fin) del encabezado
+    'Periodo 02-JUN-25/30-JUN-25', o None si no se encuentra."""
+    for pagina in estado.pages:
+        texto = pagina.extract_text() or ""
+        m = _PERIODO_RE.search(texto.replace("\n", " "))
+        if m and m.group(1) in _MESES and m.group(3) in _MESES:
+            return (_MESES.index(m.group(1)) + 1, 2000 + int(m.group(2)),
+                    _MESES.index(m.group(3)) + 1, 2000 + int(m.group(4)))
+    return None
+
+
+def _fecha_con_anio(fecha, periodo) -> str:
+    """Normaliza 'dd MMM' (sin espacios sobrantes) y le agrega el año del
+    periodo; si el periodo cruza de año, los meses >= al de inicio toman el
+    año de inicio y el resto el de fin."""
+    f = re.sub(r"\s+", " ", str(fecha)).strip()
+    m = re.match(r"^(\d{2}) ([A-ZÁÉÍÓÚÑ]{3})$", f, re.IGNORECASE)
+    if not m or periodo is None or m.group(2).upper() not in _MESES:
+        return f
+    mes_ini, anio_ini, _, anio_fin = periodo
+    mes = _MESES.index(m.group(2).upper()) + 1
+    anio = anio_ini if (anio_ini == anio_fin or mes >= mes_ini) else anio_fin
+    return f"{m.group(1)} {m.group(2).upper()} {anio}"
+
 
 def agrupar_columnas(caracteres) -> pd.DataFrame:
     """
@@ -143,17 +186,11 @@ def unificar_columnas(columnas: pd.DataFrame) -> pd.DataFrame:
 
 def analizar_estados(estado):
     df = pd.DataFrame()
-    anios = []
-    texto = [pagina.extract_text().replace("\n", "").replace(" ", "") for pagina in estado.pages]
+    texto = [(pagina.extract_text() or "").replace("\n", "").replace(" ", "") for pagina in estado.pages]
     for i, pagina in enumerate(estado.pages):
         if re.search("FechaConceptoOrigen", texto[i]):
             movimientos = extraer_movimientos_pagina(pagina)
             df = pd.concat([df, pd.DataFrame(movimientos)])
-        elif re.search("Periodo", texto[i]):
-            periodo = texto[i].split("Periodo")[1]
-            periodo = periodo.split("C.P")[0]
-            anio = periodo.split("/")[0]
-            anios.append(f"20{anio.split('-')[-1]}")
 
     df = incluir_movimientos(df)
     df = unificar_tabla(df)

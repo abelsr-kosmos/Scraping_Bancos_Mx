@@ -68,6 +68,10 @@ class NuTableExtractor:
                 in_table = True
                 self._log(f"[extract_movements] ✅ Tabla encontrada en página {page_idx}")
                 page_text = page_text[m_begin.end():]  # cortamos desde el final del header
+            else:
+                # El encabezado "FECHA DEL 01 AL 31 OCT 2025 (31 DÍAS) ..." se repite en cada
+                # hoja y su "31 OCT 2025" se leía como la fecha de un movimiento.
+                page_text = self.begin_table_pattern.sub("", page_text)
 
             # 2) Si estamos dentro de tabla, extraer bloques por fecha
             date_matches = list(self.date_pattern.finditer(page_text))

@@ -239,12 +239,14 @@ logger = logging.getLogger(__name__)
 # Constantes y regex compilados
 # El render/OCR mete ruido entre fecha y folio ("|", "/", "(", "}") y a veces
 # confunde 0 con O, por eso se toleran separadores y se normaliza después.
-SEP = r"[\s|/\\(){}\[\]!]*"
+SEP = r"[\s|/\\(){}\[\]!,.]*"
 DATE_FOLIO_PATTERN = re.compile(
-    rf"^\s*[(|/]?\s*(?P<fecha>[\dO]{{2}}-[A-Za-z]{{3}}-\d{{4}}){SEP}(?P<folio>[\dO]{{7}})(?!\d)",
+    rf"^\s*[(|/]?\s*(?P<fecha>[\dO]{{2}}-[A-Za-z0]{{3}}-\d{{4}}){SEP}(?P<folio>[\dO]{{7,9}})(?!\d)",
     flags=re.IGNORECASE,
 )
 MONEY_PATTERN = re.compile(r"(?P<monto>\d{1,3}(?:[.,]\d{3})*[.,]\d{2})")
+# Línea que es solo un monto (el render pone retiro/depósito y saldo en líneas aparte)
+MONEY_LINE_PATTERN = re.compile(r"^\W*(?P<monto>\d{1,3}(?:[.,]\d{3})*[.,]\d{2})\W*$")
 SALDO_ANTERIOR_PATTERN = re.compile(
     r"SALDO\s*FINAL\s*DEL\s*PERIODO\s*ANTERIOR\D{0,80}?(?P<saldo>\d{1,3}(?:[.,]\d{3})*[.,]\d{2})",
     flags=re.IGNORECASE,
@@ -311,15 +313,22 @@ class ParserTransacciones:
             return None
 
         dd, mes, anio = coincidencia.group('fecha').upper().split('-')
-        fecha = f"{dd.replace('O', '0')}-{mes}-{anio}"
+        fecha = f"{dd.replace('O', '0')}-{mes.replace('0', 'O')}-{anio}"
         folio = coincidencia.group('folio').upper().replace('O', '0')
 
-        # Los montos del movimiento van en la primera línea; las líneas de
-        # detalle (cuenta, rastreo, pie de página) no deben aportar montos.
-        primera = encabezado.splitlines()[0]
-        montos = MONEY_PATTERN.findall(primera[coincidencia.end():])
-        if not montos:
-            montos = MONEY_PATTERN.findall(encabezado[coincidencia.end():])
+        # Los montos van en la primera línea (texto de pdftotext) o en las líneas
+        # siguientes que son solo un monto (render del GPU); las líneas de detalle
+        # (cuenta, rastreo, pie de página) no deben aportar montos.
+        lineas = encabezado.splitlines()
+        primera = lineas[0][coincidencia.end():]
+        montos = MONEY_PATTERN.findall(primera)
+        for linea in lineas[1:]:
+            if len(montos) >= 2:
+                break
+            m = MONEY_LINE_PATTERN.match(linea)
+            if not m:
+                break
+            montos.append(m.group('monto'))
         if not montos:
             logger.warning("Grupo sin montos omitido")
             return None
@@ -328,8 +337,8 @@ class ParserTransacciones:
         monto = self._normalizar_monto(monto_str)
         saldo = self._normalizar_monto(montos[1]) if len(montos) > 1 else None
 
-        # Descripción: texto entre folio y primer monto
-        descripcion = encabezado[coincidencia.end():].split(monto_str)[0]
+        # Descripción: texto entre folio y primer monto de la primera línea
+        descripcion = primera.split(monto_str)[0]
         descripcion = descripcion.strip(' |/}{!').replace('\n', ' ').strip()
         # Detalle de las líneas siguientes (hasta el pie de página)
         return Transaccion(fecha=fecha, folio=folio, descripcion=descripcion, monto=monto, saldo=saldo)

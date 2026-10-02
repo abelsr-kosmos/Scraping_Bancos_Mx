@@ -237,8 +237,19 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Constantes y regex compilados
-DATE_FOLIO_PATTERN = re.compile(r"^\s*\(?(?P<fecha>\d{2}-[A-Za-z]{3}-\d{4})\)?\s+(?P<folio>\d{7})", flags=re.IGNORECASE)
+# El render/OCR mete ruido entre fecha y folio ("|", "/", "(", "}") y a veces
+# confunde 0 con O, por eso se toleran separadores y se normaliza después.
+SEP = r"[\s|/\\(){}\[\]!]*"
+DATE_FOLIO_PATTERN = re.compile(
+    rf"^\s*[(|/]?\s*(?P<fecha>[\dO]{{2}}-[A-Za-z]{{3}}-\d{{4}}){SEP}(?P<folio>[\dO]{{7}})(?!\d)",
+    flags=re.IGNORECASE,
+)
 MONEY_PATTERN = re.compile(r"(?P<monto>\d{1,3}(?:[.,]\d{3})*[.,]\d{2})")
+SALDO_ANTERIOR_PATTERN = re.compile(
+    r"SALDO\s*FINAL\s*DEL\s*PERIODO\s*ANTERIOR\D{0,80}?(?P<saldo>\d{1,3}(?:[.,]\d{3})*[.,]\d{2})",
+    flags=re.IGNORECASE,
+)
+ABONO_PATTERN = re.compile(r"\b(ABONO|DEPOSITO|DEPOSITOI|CASHBACK)", flags=re.IGNORECASE)
 
 @dataclass
 class Transaccion:
@@ -246,7 +257,7 @@ class Transaccion:
     folio: str
     descripcion: str
     monto: float
-    saldo: float
+    saldo: Optional[float]
 
 class ParserTransacciones:
     """
@@ -256,8 +267,7 @@ class ParserTransacciones:
     def __init__(self, texto: str, ocr: dict | None = None):
         self.texto = texto
         self.ocr = ocr
-        if ocr:
-            self.flattened_ocr = self.flatten_doctr_ocr(ocr)
+        self.flattened_ocr = self.flatten_doctr_ocr(ocr) if ocr else None
 
     def separar_grupos(self) -> List[str]:
         """Divide el texto en grupos iniciando en líneas fecha-folio."""
@@ -282,74 +292,87 @@ class ParserTransacciones:
             limpio = limpio.replace(',', '.')
         return float(limpio)
 
-    def parsear_grupo(self, grupo: str, first_movement: bool) -> Optional[Transaccion]:
-        """Extrae los campos de un grupo de texto."""
-        montos = MONEY_PATTERN.findall(grupo)
-        if len(montos) < 2:
-            logger.warning("Grupo con menos de 2 montos omitido")
-            return None
+    def saldo_anterior(self) -> Optional[float]:
+        """Saldo de apertura impreso ('SALDO FINAL DEL PERIODO ANTERIOR: $1,037.11')."""
+        m = SALDO_ANTERIOR_PATTERN.search(self.texto.replace('\n', ' '))
+        return self._normalizar_monto(m.group('saldo')) if m else None
 
-        # Encuentra fecha y folio
+    def parsear_grupo(self, grupo: str, first_movement: bool) -> Optional[Transaccion]:
+        """Extrae los campos de un grupo de texto.
+
+        `monto` regresa positivo; el signo (depósito/retiro) lo resuelve
+        to_dataframe contra el saldo corrido. `saldo` es None si el render
+        dañó ese monto (se reconstruye después).
+        """
         encabezado = grupo.replace('(', '').replace(')', '')
         coincidencia = DATE_FOLIO_PATTERN.search(encabezado)
         if not coincidencia:
             logger.error("No se encontró fecha/folio en grupo")
             return None
 
-        fecha = coincidencia.group('fecha')
-        folio = coincidencia.group('folio')
+        dd, mes, anio = coincidencia.group('fecha').upper().split('-')
+        fecha = f"{dd.replace('O', '0')}-{mes}-{anio}"
+        folio = coincidencia.group('folio').upper().replace('O', '0')
 
-        # Montos
-        monto_str, saldo_str = montos[0], montos[1]
+        # Los montos del movimiento van en la primera línea; las líneas de
+        # detalle (cuenta, rastreo, pie de página) no deben aportar montos.
+        primera = encabezado.splitlines()[0]
+        montos = MONEY_PATTERN.findall(primera[coincidencia.end():])
+        if not montos:
+            montos = MONEY_PATTERN.findall(encabezado[coincidencia.end():])
+        if not montos:
+            logger.warning("Grupo sin montos omitido")
+            return None
+
+        monto_str = montos[0]
         monto = self._normalizar_monto(monto_str)
-        saldo = self._normalizar_monto(saldo_str)
+        saldo = self._normalizar_monto(montos[1]) if len(montos) > 1 else None
 
         # Descripción: texto entre folio y primer monto
-        inicio = coincidencia.end()
-        descripcion = grupo[inicio:].split(monto_str)[0].strip().replace('\n', ' ')
-        
-        # Asignar signo al monto
-        if first_movement and self.flattened_ocr is not None:
-            word_data = self.flattened_ocr[self.flattened_ocr['word'] == monto_str]
-            if (word_data.geometry.values[0][0] + word_data.geometry.values[0][2])/2 > 0.76:
-                monto = -monto
-            else:
-                monto = monto
-
-        return Transaccion(
-            fecha=fecha,
-            folio=folio,
-            descripcion=descripcion,
-            monto=monto,
-            saldo=saldo
-        )
+        descripcion = encabezado[coincidencia.end():].split(monto_str)[0]
+        descripcion = descripcion.strip(' |/}{!').replace('\n', ' ').strip()
+        # Detalle de las líneas siguientes (hasta el pie de página)
+        return Transaccion(fecha=fecha, folio=folio, descripcion=descripcion, monto=monto, saldo=saldo)
 
     def to_dataframe(self) -> pd.DataFrame:
         """Devuelve un DataFrame con todas las transacciones parseadas."""
         grupos = self.separar_grupos()
-        first_movement = True
-        transacciones = []
-        for grupo in grupos:
-            transacciones.append(self.parsear_grupo(grupo, first_movement))
-            first_movement = False
-        registros = [asdict(t) for t in transacciones if t]
-        df = pd.DataFrame(registros)
+        transacciones = [t for t in (self.parsear_grupo(g, i == 0) for i, g in enumerate(grupos)) if t]
 
-        # Cálculo de depósitos y retiros
-        df['saldo_previo'] = df['saldo'].shift(1)
-        df['delta_saldo'] = df['saldo'] - df['saldo_previo']
-        df['monto_signado'] = df['monto'] * df['delta_saldo'].apply(lambda x: -1 if x < 0 else 1)
-        df['deposito'] = df['monto_signado'].clip(lower=0)
-        df['retiro'] = (-df['monto_signado']).clip(lower=0)
-        # Unir folio y descripcion en una sola columna
-        df['descripcion'] = df['folio'].astype(str) + ' ' + df['descripcion'].str.replace('\n', ' ')
-        # Eliminar col de folio
-        df = df.drop(columns=['folio'])
+        prev = self.saldo_anterior()
+        registros = []
+        for t in transacciones:
+            signo = None
+            if t.saldo is not None and prev is not None:
+                if abs(prev + t.monto - t.saldo) < 0.005:
+                    signo = 1
+                elif abs(prev - t.monto - t.saldo) < 0.005:
+                    signo = -1
+            saldo = t.saldo
+            if signo is None:
+                # Sin saldo previo, saldo ilegible o que no cuadra: se decide por texto
+                # y, si hay saldo previo, el saldo se reconstruye con la cadena.
+                if prev is None and t.saldo is not None:
+                    signo = 1 if ABONO_PATTERN.search(t.descripcion) else -1
+                else:
+                    signo = 1 if ABONO_PATTERN.search(t.descripcion) else -1
+                    if prev is not None:
+                        if saldo is not None:
+                            logger.warning("Saldo no cuadra en %s %s (previo=%s, monto=%s, saldo=%s)",
+                                           t.fecha, t.folio, prev, t.monto, t.saldo)
+                        saldo = round(prev + signo * t.monto, 2)
+                if saldo is None:
+                    saldo = round((prev or 0.0) + signo * t.monto, 2)
+            registros.append({
+                'fecha': t.fecha,
+                'descripcion': f"{t.folio} {t.descripcion}",
+                'deposito': t.monto if signo > 0 else 0.0,
+                'retiro': t.monto if signo < 0 else 0.0,
+                'saldo': saldo,
+            })
+            prev = saldo
+        return pd.DataFrame(registros, columns=['fecha', 'descripcion', 'deposito', 'retiro', 'saldo'])
 
-        # Selección y renombrado de columnas finales en español
-        df_final = df[['fecha', 'descripcion', 'deposito', 'retiro', 'saldo']]
-        return df_final
-    
     def flatten_doctr_ocr(self, doctr_ocr: dict) -> dict:
         words = []
         for page in doctr_ocr:

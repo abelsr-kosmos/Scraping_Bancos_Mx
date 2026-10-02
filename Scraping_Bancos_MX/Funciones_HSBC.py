@@ -1,5 +1,6 @@
 import re
 import itertools
+from datetime import date, timedelta
 from dataclasses import dataclass, asdict
 from typing import List, Optional, Pattern, Tuple
 import pandas as pd
@@ -28,6 +29,8 @@ class ParserHSBC:
     MONEY: Pattern = re.compile(r'\$\s*(\d[\d,\s]*(?:\.\s*\d[\d\s]*)?)')
     SALDO_INICIAL: Pattern = re.compile(
         r'Saldo\s+Inicial(?:\s+del)?\s+(?:Periodo\s+)?\$\s*([\d,]+\.\d{2})', flags=re.IGNORECASE)
+    PERIODO: Pattern = re.compile(
+        r'Periodo\s+del\s+(\d{2})/(\d{2})/(\d{4})\s*al\s*(\d{2})/(\d{2})/(\d{4})', flags=re.IGNORECASE)
     CARGO: Pattern = re.compile(r'\b(CGO|CARGO|RETIRO|POLIZA|PAGO\s+DE\s+TARJETA|COMISION)', flags=re.IGNORECASE)
     ABONO: Pattern = re.compile(r'\b(ABONO|NOMINA|DEPOSITO)', flags=re.IGNORECASE)
 
@@ -71,6 +74,31 @@ class ParserHSBC:
     def _saldo_inicial(self) -> Optional[float]:
         m = self.SALDO_INICIAL.search(self.texto)
         return float(m.group(1).replace(',', '')) if m else None
+
+    def _periodo(self) -> Optional[Tuple[date, date]]:
+        m = self.PERIODO.search(self.texto)
+        if not m:
+            return None
+        try:
+            ini = date(int(m.group(3)), int(m.group(2)), int(m.group(1)))
+            fin = date(int(m.group(6)), int(m.group(5)), int(m.group(4)))
+        except ValueError:
+            return None
+        return (ini, fin) if ini <= fin else None
+
+    @staticmethod
+    def _fecha_completa(dia: str, periodo: Optional[Tuple[date, date]]) -> str:
+        """Día suelto ('01') -> 'dd/mm/aaaa' con el mes/año del periodo impreso.
+        Sin periodo (o si el día no cae en él) regresa solo el día."""
+        if periodo is None:
+            return dia
+        ini, fin = periodo
+        d = ini
+        while d <= fin:
+            if d.day == int(dia):
+                return d.strftime('%d/%m/%Y')
+            d += timedelta(days=1)
+        return dia
 
     # ----------------------------------------------------------------- filas
     def _filas(self) -> List[Tuple[str, str, List[str]]]:
@@ -124,6 +152,7 @@ class ParserHSBC:
     @montos_cero
     def to_dataframe(self) -> pd.DataFrame:
         prev = self._saldo_inicial()
+        periodo = self._periodo()
         rows = []
         for dia, desc, montos in self._filas():
             hint = self._clasificar(desc)
@@ -153,7 +182,7 @@ class ParserHSBC:
 
             prev = saldo
             rows.append(MovimientoHSBC(
-                dia, desc,
+                self._fecha_completa(dia, periodo), desc,
                 monto if signo < 0 else 0.0,
                 monto if signo > 0 else 0.0,
                 saldo))

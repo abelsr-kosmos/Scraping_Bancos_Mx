@@ -232,13 +232,14 @@ def Scrap_Estado_Banjercito(ruta_archivo: str) -> pd.DataFrame:
 
     df = pd.DataFrame(all_movements)
 
-    # Construir fecha dd/mm/yyyy a partir de "DD M" y el año de la fecha de corte
+    # Construir fecha dd/mm/yyyy a partir de "M D" (el PDF imprime el mes
+    # primero: "10 13" = 13 de octubre) y el año de la fecha de corte
     def _format_fecha(row):
         raw = row["dia_regis"].strip() if row["dia_regis"].strip() else row["dia_oper"].strip()
         parts = raw.split()
         if len(parts) == 2:
-            dia = parts[0].zfill(2)
-            mes = parts[1].zfill(2)
+            mes = parts[0].zfill(2)
+            dia = parts[1].zfill(2)
             return f"{dia}/{mes}/{anio}"
         return raw
 
@@ -258,5 +259,15 @@ def Scrap_Estado_Banjercito(ruta_archivo: str) -> pd.DataFrame:
     
     # Quita filas donde no haya retiro ni depósito (ej. filas de continuación sin monto)
     df = df[~((df["retiro"].isna() | (df["retiro"] == 0)) & (df["deposito"].isna() | (df["deposito"] == 0)))]
+
+    # Cuando el saldo queda en 0.00 el PDF deja la celda vacía: se reconstruye
+    # con el saldo corrido (saldo previo - retiro + depósito).
+    saldos = df["saldo"].tolist()
+    retiros = df["retiro"].fillna(0.0).tolist()
+    depositos = df["deposito"].fillna(0.0).tolist()
+    for i, s_i in enumerate(saldos):
+        if pd.isna(s_i) and i > 0 and not pd.isna(saldos[i - 1]):
+            saldos[i] = round(saldos[i - 1] - retiros[i] + depositos[i], 2)
+    df["saldo"] = saldos
 
     return df[["fecha", "descripcion", "retiro", "deposito", "saldo"]].copy()

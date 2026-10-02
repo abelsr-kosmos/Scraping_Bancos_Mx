@@ -81,7 +81,10 @@ class NuTableExtractor:
                 start_idx = indexes[i]
                 end_idx = indexes[i + 1] if i + 1 < len(indexes) else len(page_text)
 
-                movimiento_text = page_text[start_idx:end_idx].strip()
+                movimiento_text = page_text[start_idx:end_idx]
+                # Pie de página de Nu que queda pegado al último movimiento de la hoja
+                movimiento_text = movimiento_text.split("Nu México Financiera")[0]
+                movimiento_text = movimiento_text.split("Con estos movimientos")[0].strip()
                 if not movimiento_text:
                     continue
 
@@ -158,7 +161,9 @@ class NuTableExtractor:
         df = pd.DataFrame(rows, columns=["fecha", "descripcion", "deposito", "retiro"])
         df['saldo'] = None
         df = df[['fecha', 'descripcion', 'deposito', 'retiro', 'saldo']]
-        return df
+        # El PDF lista del más nuevo al más viejo (también dentro del mismo día);
+        # se entrega en orden cronológico ascendente.
+        return df.iloc[::-1].reset_index(drop=True)
 
 # Ejemplo de uso:
 # extractor = NuTableExtractor(verbose=True)

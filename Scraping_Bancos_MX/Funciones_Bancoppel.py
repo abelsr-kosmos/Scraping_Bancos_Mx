@@ -1,5 +1,6 @@
 import re
 from dataclasses import dataclass
+from datetime import date
 from typing import List, Dict, Optional, Tuple
 
 import pdfplumber
@@ -90,57 +91,101 @@ class BancoppelMovimientosExtractor:
                 
         return movimientos
 
-    def to_dataframe(self, movimientos: List[Dict]) -> pd.DataFrame:
-        """Procesa la lista de movimientos para generar el DataFrame final con signos correctos."""
+    MESES = {"ENE": 1, "FEB": 2, "MAR": 3, "ABR": 4, "MAY": 5, "JUN": 6,
+             "JUL": 7, "AGO": 8, "SEP": 9, "OCT": 10, "NOV": 11, "DIC": 12}
+
+    def extract_periodo(self, all_text: List[str]) -> Optional[Tuple[date, date]]:
+        """Periodo impreso ("Período: 02/SEP./2021 AL 01/OCT./2021") como (inicio, fin)."""
+        patron = r'Per[ií]odo:\s*(\d{1,2})/([A-Za-z]{3})\.?/(\d{4})\s+AL\s+(\d{1,2})/([A-Za-z]{3})\.?/(\d{4})'
+        for page_text in all_text:
+            m = re.search(patron, page_text)
+            if m:
+                try:
+                    ini = date(int(m.group(3)), self.MESES[m.group(2).upper()], int(m.group(1)))
+                    fin = date(int(m.group(6)), self.MESES[m.group(5).upper()], int(m.group(4)))
+                except (KeyError, ValueError):
+                    return None
+                return ini, fin
+        return None
+
+    def extract_saldo_final(self, all_text: List[str]) -> Optional[float]:
+        """Saldo Actual de la carátula (resumen de la cuenta)."""
+        for page_text in all_text:
+            m = re.search(r'Saldo Actual\s+([\d,]+\.\d{2})', page_text)
+            if m:
+                return float(m.group(1).replace(',', ''))
+        return None
+
+    @staticmethod
+    def _fecha_completa(mm_dd: str, periodo: Optional[Tuple[date, date]]) -> str:
+        """mm/dd (como lo imprime Bancoppel) -> dd/mm/aaaa con el año del periodo."""
+        mes, dia = (int(x) for x in mm_dd.split('/'))
+        if periodo is None:
+            return f"{dia:02d}/{mes:02d}"
+        ini, fin = periodo
+        for anio in sorted({ini.year, fin.year}):
+            try:
+                if ini <= date(anio, mes, dia) <= fin:
+                    return f"{dia:02d}/{mes:02d}/{anio}"
+            except ValueError:
+                continue
+        return f"{dia:02d}/{mes:02d}/{ini.year}"
+
+    def to_dataframe(self, movimientos: List[Dict], periodo: Optional[Tuple[date, date]] = None,
+                     saldo_final: Optional[float] = None) -> pd.DataFrame:
+        """Genera el DataFrame en orden cronológico ascendente.
+
+        El estado de cuenta lista los movimientos del más nuevo al más viejo y la
+        columna Saldo es el saldo ANTES de cada movimiento (el más viejo trae el
+        saldo anterior de la carátula y el más nuevo, el saldo previo al Saldo
+        Actual). Por eso el saldo después de cada movimiento es el saldo impreso en
+        la fila siguiente del listado (más nueva), y el del movimiento más nuevo
+        es `saldo_final`. El signo sale de la diferencia entre ambos saldos.
+        """
         movimientos_df = pd.DataFrame(movimientos)
-        
+
         if movimientos_df.empty:
             return pd.DataFrame(columns=['fecha', 'descripcion', 'retiro', 'deposito', 'saldo'])
 
-        # Limpieza de números
-        # El prototipo hace replace de comas
-        movimientos_df['monto'] = movimientos_df['monto'].str.replace(',', '', regex=False).astype(float)
-        movimientos_df['saldo'] = movimientos_df['saldo'].str.replace(',', '', regex=False).astype(float)
+        montos = movimientos_df['monto'].str.replace(',', '', regex=False).astype(float).tolist()
+        antes = movimientos_df['saldo'].str.replace(',', '', regex=False).astype(float).tolist()
+        n = len(montos)
 
-        # Lógica de inferencia de signo basada en cambios de saldo
-        # NOTA: Esta lógica asume el orden de filas tal cual vienen al iterar (top-down extracción)
-        
-        saldo_inicial = movimientos_df['saldo'].iloc[0]
-        
-        # Iteramos para ajustar el signo de 'monto' según si el saldo subió o bajó:
-        # saldo baja -> retiro (monto negativo). Saldo sube o igual -> depósito (monto positivo).
+        filas = []
+        for k in range(n):
+            if k > 0:
+                despues = antes[k - 1]
+            elif saldo_final is not None:
+                despues = saldo_final
+            else:
+                despues = None
 
-        for idx, row in movimientos_df.iterrows():
-            if idx == 0:
-                continue
-                
-            saldo_actual = row['saldo']
-            monto = row['monto']
-            
-            # Comparación con el saldo anterior (del iterador)
-            if saldo_actual - saldo_inicial < 0:
-                # El saldo bajó -> es un retiro, monto negativo
-                row['monto'] = -monto
+            monto = montos[k]
+            if despues is not None:
+                dif = round(despues - antes[k], 2)
+                signo = 1 if dif > 0 else -1 if dif < 0 else None
+            else:
+                signo = None
+            if signo is None:
+                # Sin saldo posterior (o sin cambio): se deduce del texto del concepto.
+                desc = movimientos_df['descripcion'].iloc[k].upper()
+                signo = 1 if re.match(r'(ABONO|DEPOSITO|DEPÓSITO|DEVOLUCION|PAGO DE INTERESES)', desc) else -1
+                despues = round(antes[k] + signo * monto, 2)
 
-            # Actualizamos en el DF
-            movimientos_df.at[idx, 'monto'] = row['monto']
-            
-            # Actualizamos el saldo de referencia para la siguiente iteración
-            saldo_inicial = saldo_actual
-            
-        # Asignación de columnas retiro/deposito
-        # Prototipo: 
-        # retiro = -x if x < 0 else None  (Si monto es negativo, retiro es positivo de ese valor)
-        # deposito = x if x > 0 else None (Si monto es positivo, deposito es ese valor)
-        
-        movimientos_df['retiro'] = movimientos_df['monto'].apply(lambda x: -x if x < 0 else None)
-        movimientos_df['deposito'] = movimientos_df['monto'].apply(lambda x: x if x > 0 else None)
-        
-        return movimientos_df[['fecha', 'descripcion', 'retiro', 'deposito', 'saldo']]
+            filas.append({
+                'fecha': self._fecha_completa(movimientos_df['fecha'].iloc[k], periodo),
+                'descripcion': movimientos_df['descripcion'].iloc[k],
+                'retiro': monto if signo < 0 else None,
+                'deposito': monto if signo > 0 else None,
+                'saldo': despues,
+            })
+
+        # Listado más nuevo -> más viejo: se entrega en orden cronológico ascendente.
+        return pd.DataFrame(filas[::-1], columns=['fecha', 'descripcion', 'retiro', 'deposito', 'saldo'])
 
     @montos_cero
     def run(self, pdf_path: str) -> pd.DataFrame:
         """Ejecuta el pipeline completo."""
         all_text = self.read_pdf_text(pdf_path)
         movimientos = self.extract_movimientos(all_text)
-        return self.to_dataframe(movimientos)
+        return self.to_dataframe(movimientos, self.extract_periodo(all_text), self.extract_saldo_final(all_text))

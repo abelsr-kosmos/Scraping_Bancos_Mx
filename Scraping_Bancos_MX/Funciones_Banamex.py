@@ -1,9 +1,82 @@
 import re
+from datetime import date
 from typing import Optional
 
 import pdfplumber
 import pandas as pd
 from ._normalizacion import montos_cero
+
+
+_MESES_NUM = {"ENE": 1, "FEB": 2, "MAR": 3, "ABR": 4, "MAY": 5, "JUN": 6,
+              "JUL": 7, "AGO": 8, "SEP": 9, "OCT": 10, "NOV": 11, "DIC": 12}
+_RE_PERIODO = re.compile(
+    r"(\d{1,2})/([A-Z]{3})/(\d{4})\s+AL\s+(\d{1,2})/([A-Z]{3})/(\d{4})", re.IGNORECASE)
+
+
+_MESES_LARGOS = {"ENERO": 1, "FEBRERO": 2, "MARZO": 3, "ABRIL": 4, "MAYO": 5, "JUNIO": 6,
+                 "JULIO": 7, "AGOSTO": 8, "SEPTIEMBRE": 9, "OCTUBRE": 10, "NOVIEMBRE": 11, "DICIEMBRE": 12}
+_RE_PERIODO_DEL_AL = re.compile(
+    r"del\s+(\d{1,2})\s+al\s+(\d{1,2})\s+de\s+([a-zA-Z]+)\s+de\s+(\d{4})", re.IGNORECASE)
+_RE_CORTE = re.compile(r"ESTADO\s+DE\s+CUENTA\s+AL\s+(\d{1,2})\s+DE\s+([A-Za-z]+)\s+DE\s+(\d{4})", re.IGNORECASE)
+
+
+def _periodo_alterno(texto):
+    """'Periodo del 01 al 30 de noviembre de 2024', o la fecha de corte
+    ('ESTADO DE CUENTA AL 20 DE DICIEMBRE DE 2024') como fin y un mes antes
+    como inicio."""
+    try:
+        m = _RE_PERIODO_DEL_AL.search(texto)
+        if m and m.group(3).upper() in _MESES_LARGOS:
+            mes, anio = _MESES_LARGOS[m.group(3).upper()], int(m.group(4))
+            return date(anio, mes, int(m.group(1))), date(anio, mes, int(m.group(2)))
+        m = _RE_CORTE.search(texto)
+        if m and m.group(2).upper() in _MESES_LARGOS:
+            fin = date(int(m.group(3)), _MESES_LARGOS[m.group(2).upper()], int(m.group(1)))
+            ini = date(fin.year - (fin.month == 1), 12 if fin.month == 1 else fin.month - 1, 1)
+            return ini, fin
+    except ValueError:
+        pass
+    return None
+
+
+def extraer_periodo(texto):
+    """Busca 'DD/MMM/AAAA AL DD/MMM/AAAA' (RESUMEN DEL ...) y regresa
+    (date_inicio, date_fin), o None si no aparece / no es válido."""
+    texto = re.sub(r"\s*/\s*", "/", re.sub(r"(?<=\d)[ \t]+(?=\d)", "", texto or ""))
+    m = _RE_PERIODO.search(texto)
+    if not m:
+        return _periodo_alterno(texto)
+    try:
+        ini = date(int(m.group(3)), _MESES_NUM[m.group(2).upper()], int(m.group(1)))
+        fin = date(int(m.group(6)), _MESES_NUM[m.group(5).upper()], int(m.group(4)))
+    except (KeyError, ValueError):
+        return None
+    return (ini, fin) if ini <= fin else None
+
+
+def fecha_con_anio(fecha, periodo):
+    """'20 MAR' + periodo -> '20/03/2024' (dd/mm/aaaa). Si no hay periodo o la
+    fecha no se entiende, regresa la fecha tal cual."""
+    if not periodo or not isinstance(fecha, str):
+        return fecha
+    m = re.match(r"^\s*(\d{1,2})\s+([A-Za-z]{3})\s*$", fecha)
+    if not m or m.group(2).upper() not in _MESES_NUM:
+        return fecha
+    dia, mes = int(m.group(1)), _MESES_NUM[m.group(2).upper()]
+    ini, fin = periodo
+    candidatos = []
+    for anio in range(ini.year, fin.year + 1):
+        try:
+            candidatos.append(date(anio, mes, dia))
+        except ValueError:
+            pass
+    if not candidatos:
+        return fecha
+    dentro = [d for d in candidatos if ini <= d <= fin]
+    elegido = (dentro or candidatos)[-1]
+    return elegido.strftime("%d/%m/%Y")
+
+MONTO_EN_BLOQUE = True
 
 @montos_cero
 def Scrap_Estado_Banamex(ruta_archivo):
@@ -87,6 +160,7 @@ def procesar_pdf(pdf_path):
         # =======================
         page0 = pdf.pages[0]
         words_page0 = page0.extract_words()
+        periodo_texto = "\n".join((pg.extract_text() or "") for pg in pdf.pages[:2])
 
         encabezados_buscar = ["RETIROS", "DEPOSITOS", "SALDO"]
         MESES_CORTOS = {"ENE", "FEB", "MAR", "ABR", "MAY", "JUN",
@@ -147,6 +221,7 @@ def procesar_pdf(pdf_path):
 
         start_reading = False
         stop_reading = False
+        periodo = extraer_periodo(periodo_texto)
 
         todos_los_movimientos = []
         movimiento_actual = None
@@ -190,6 +265,8 @@ def procesar_pdf(pdf_path):
                 line_text_upper = line_text.upper()
 
                 # Detectar periodo, p. ej. "RESUMEN DEL: 01/DIC/2023 AL 31/DIC/2023"
+                if "RESUMEN" in line_text_upper and "DEL" in line_text_upper and periodo is None:
+                    periodo = extraer_periodo(line_text)
                 if "RESUMEN" in line_text_upper and "DEL:" in line_text_upper:
                     tokens_line = line_text.split()
                     fechas = [t for t in tokens_line if re.match(r'^\d{1,2}/\d{1,2}/\d{4}$', t)]
@@ -251,7 +328,7 @@ def procesar_pdf(pdf_path):
                 # (ver comentario de monto_pendiente arriba); si para cuando
                 # cierre este movimiento nadie reclamó el buffer, se pierde,
                 # que es preferible a asignárselo al movimiento equivocado.
-                destino = movimiento_actual if es_linea_nueva else monto_pendiente
+                destino = movimiento_actual if MONTO_EN_BLOQUE else (movimiento_actual if es_linea_nueva else monto_pendiente)
                 for w in words_in_line:
                     txt = w['text'].strip()
                     center_w = (w['x0'] + w['x1']) / 2
@@ -287,6 +364,7 @@ def procesar_pdf(pdf_path):
     ])
     df = df[df["Monto"].notna() | df["Saldo"].notna()]
     df = df.reset_index(drop=True)
+    df["Fecha"] = df["Fecha"].apply(lambda f: fecha_con_anio(f, periodo))
 
     # Signo de "Monto": el saldo solo se imprime de vez en cuando (no en cada
     # movimiento) y la posición x del monto NO distingue Cargos de Abonos en
@@ -315,6 +393,12 @@ def procesar_pdf(pdf_path):
 
         if monto is None:
             es_abono = None
+        elif (saldo_anterior is not None and saldo_actual is not None
+              and abs(saldo_anterior + monto - saldo_actual) < 0.005):
+            es_abono = True
+        elif (saldo_anterior is not None and saldo_actual is not None
+              and abs(saldo_anterior - monto - saldo_actual) < 0.005):
+            es_abono = False
         elif RE_CLAVE_ABONO.search(descripcion):
             es_abono = True
         elif RE_CLAVE_CARGO.search(descripcion):
@@ -441,4 +525,7 @@ class TransactionsParser:
         """
         blocks = self._split_transactions(render)
         transactions = [t for t in (self._extract_transaction(b) for b in blocks) if t is not None]
-        return self._build_dataframe(transactions)
+        df = self._build_dataframe(transactions)
+        periodo = extraer_periodo(render)
+        df['fecha'] = df['fecha'].apply(lambda f: fecha_con_anio(f, periodo))
+        return df

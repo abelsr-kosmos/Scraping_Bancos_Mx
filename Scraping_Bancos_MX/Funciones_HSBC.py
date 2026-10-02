@@ -1,7 +1,7 @@
 import re
-import logging
+import itertools
 from dataclasses import dataclass, asdict
-from typing import List, Dict, Optional, Pattern
+from typing import List, Optional, Pattern, Tuple
 import pandas as pd
 from ._normalizacion import montos_cero
 
@@ -14,60 +14,149 @@ class MovimientoHSBC:
     saldo: float
 
 class ParserHSBC:
-    """Parser específico para extracto HSBC delimitado por 'Abono Saldo' y 'CoDI'."""
+    """Parser para el render (una palabra/fragmento por línea) del estado de cuenta HSBC.
 
-    P1: Pattern = re.compile(r'Abono\s+Saldo', flags=re.IGNORECASE)
-    P2: Pattern = re.compile(r'CoDI', flags=re.IGNORECASE)
-    P3: Pattern = re.compile(r'(\d{2}\s+[A-Z]+\s+.*?\n\d{8}\n\$\s?[0-9,]+\.[0-9]{1,2}\n\$\s?[0-9,]+\.[0-9]{1,2})', flags=re.DOTALL)
-    P4: Pattern = re.compile(r"(?<!\d)([1-9]\d{0,2}(?:[.,]\d{3})*\.[0-9]{2})(?!\d)")
-    P5: Pattern = re.compile(r'\s\d{2}\s')
+    Cada movimiento empieza en una línea "DD descripción" y trae dos montos
+    con "$": retiro/depósito y saldo. El render ensucia los montos ("$1 140,628.44",
+    "$5 58.00", "$ 66,366.4 41"), por eso cada monto se resuelve contra el saldo
+    corrido: se elige la lectura con la que saldo = saldo_previo ± monto.
+    """
+
+    HEADER_END: Pattern = re.compile(r'^Saldo$')
+    STOP: Pattern = re.compile(r'^(Emitido por:|CoDi)', flags=re.IGNORECASE)
+    ROW_START: Pattern = re.compile(r'^(0[1-9]|[12]\d|3[01])\s+(\S.*)$')
+    MONEY: Pattern = re.compile(r'\$\s*(\d[\d,\s]*(?:\.\s*\d[\d\s]*)?)')
+    SALDO_INICIAL: Pattern = re.compile(
+        r'Saldo\s+Inicial(?:\s+del)?\s+(?:Periodo\s+)?\$\s*([\d,]+\.\d{2})', flags=re.IGNORECASE)
+    CARGO: Pattern = re.compile(r'\b(CGO|CARGO|RETIRO|POLIZA|PAGO\s+DE\s+TARJETA|COMISION)', flags=re.IGNORECASE)
+    ABONO: Pattern = re.compile(r'\b(ABONO|NOMINA|DEPOSITO)', flags=re.IGNORECASE)
 
     def __init__(self, texto: str):
         self.texto = texto
 
-    def clean_section(self) -> str:
-        i1 = self.P1.search(self.texto).end()
-        i2 = self.P2.search(self.texto).start()
-        section = self.texto[i1:i2].replace('. ', '.')
-        return section
+    # ------------------------------------------------------------------ montos
+    @staticmethod
+    def _candidatos(raw: str) -> List[float]:
+        """Lecturas posibles de un monto ensuciado por el render, de la más a la menos probable."""
+        raw = raw.strip()
+        ent, _, frac = raw.partition('.')
+        enteros = []
+        extra = ''
+        if ' ' in ent.strip():
+            # "49,6 698" -> el fragmento sobrante "6" se pega al grupo de miles ya presente
+            izq, der = ent.strip().rsplit(None, 1)
+            if ',' in izq:
+                extra = re.sub(r'\d+$', '', izq) + der
+        for e in (ent.replace(' ', ''), ent.split()[-1] if ent.split() else '', extra):
+            if e and e not in enteros:
+                enteros.append(e)
+        frac = re.sub(r'\s+', '', frac)
+        fracs = []
+        if frac:
+            for f in (frac[:2], frac[-2:]):
+                if len(f) == 2 and f not in fracs:
+                    fracs.append(f)
+        else:
+            fracs = ['00']
+        out = []
+        for e, f in itertools.product(enteros, fracs):
+            try:
+                v = float(f'{e.replace(",", "")}.{f}')
+            except ValueError:
+                continue
+            if v not in out:
+                out.append(v)
+        return out
 
-    def split_movimientos(self, section: str) -> List[str]:
-        parts = re.split(self.P3, section)
-        return [p.strip() for p in parts if p and p.strip()]
+    def _saldo_inicial(self) -> Optional[float]:
+        m = self.SALDO_INICIAL.search(self.texto)
+        return float(m.group(1).replace(',', '')) if m else None
+
+    # ----------------------------------------------------------------- filas
+    def _filas(self) -> List[Tuple[str, str, List[str]]]:
+        """Regresa (día, descripción, [textos de monto $]) por movimiento, solo dentro de la tabla."""
+        filas = []
+        activo = False
+        prev_header = []
+        cur = None
+        for linea in self.texto.splitlines():
+            ln = linea.strip()
+            if not ln:
+                continue
+            if self.STOP.match(ln):
+                activo = False
+                cur = None
+                if ln.lower().startswith('codi'):
+                    break
+                continue
+            if not activo:
+                prev_header = (prev_header + [ln])[-3:]
+                if self.HEADER_END.match(ln) and any('Deposito/Abono' in h for h in prev_header[:-1]):
+                    activo = True
+                    cur = None
+                    prev_header = []
+                continue
+            m = self.ROW_START.match(ln)
+            if m:
+                cur = [m.group(1), [], []]
+                filas.append(cur)
+                ln = m.group(2)
+            if cur is None:
+                continue
+            montos = self.MONEY.findall(ln)
+            if montos:
+                texto_previo = ln[:ln.index('$')].strip()
+                if texto_previo and not cur[2]:
+                    cur[1].append(texto_previo)
+                cur[2].extend(montos)
+            elif not cur[2]:
+                cur[1].append(ln)
+        return [(d, ' '.join(desc), montos) for d, desc, montos in filas if montos]
+
+    def _clasificar(self, desc: str) -> Optional[int]:
+        """+1 si por texto parece abono, -1 si cargo, None si no se sabe."""
+        if self.CARGO.search(desc):
+            return -1
+        if self.ABONO.search(desc):
+            return 1
+        return None
 
     @montos_cero
     def to_dataframe(self) -> pd.DataFrame:
-        sec = self.clean_section()
-        bloques = self.split_movimientos(sec)
+        prev = self._saldo_inicial()
         rows = []
-        prev_saldo = 0
+        for dia, desc, montos in self._filas():
+            hint = self._clasificar(desc)
+            cand_a = self._candidatos(montos[0])
+            cand_s = self._candidatos(montos[-1]) if len(montos) > 1 else []
+            monto = saldo = signo = None
 
-        for b in bloques:
-            det = b.replace('\n', ' ').replace(', ', ',')
-            nums = self.P4.findall(det)
-            if not nums:
-                continue
+            if prev is not None and cand_s:
+                encontrados = []
+                for a, s in itertools.product(cand_a, cand_s):
+                    for sg in (1, -1):
+                        if abs(prev + sg * a - s) < 0.005:
+                            encontrados.append((a, s, sg))
+                if encontrados:
+                    preferidos = [e for e in encontrados if hint is None or e[2] == hint]
+                    monto, saldo, signo = (preferidos or encontrados)[0]
 
-            # `det` viene de un bloque separado por P3, que siempre empieza
-            # con "DD MES..." (P3 exige \d{2}\s+[A-Z]+ al inicio del match),
-            # así que det[:2] es el día real de forma confiable. P5 casi
-            # nunca encontrará nada aquí porque split_movimientos ya hace
-            # .strip() a cada bloque (sin espacio antes del día no puede
-            # matchear "\s\d{2}\s"); se deja como respaldo por si acaso.
-            fechas = self.P5.findall(det)
-            fecha = fechas[0].strip() if fechas else det[:2]
+            if monto is None:
+                # Sin saldo previo o sin lectura que cuadre: mejor lectura individual.
+                monto = cand_a[0] if cand_a else 0.0
+                if cand_s:
+                    saldo = cand_s[0]
+                    signo = hint or (1 if prev is None or saldo >= prev else -1)
+                else:
+                    signo = hint or -1
+                    saldo = round((prev or 0.0) + signo * monto, 2)
 
-            movs = nums if len(nums) == 2 else [nums[0], None]
-            abono = float(movs[0].replace(',', ''))
-            saldo = float(movs[1].replace(',', '')) if movs[1] else prev_saldo
-            signo = 1 if saldo >= prev_saldo else -1
+            prev = saldo
+            rows.append(MovimientoHSBC(
+                dia, desc,
+                monto if signo < 0 else 0.0,
+                monto if signo > 0 else 0.0,
+                saldo))
 
-            valor = signo * abono
-            retiro = min(0, valor)
-            deposito = max(0, valor)
-            prev_saldo = saldo
-
-            rows.append(MovimientoHSBC(fecha, det, -retiro, deposito, saldo))
-
-        df = pd.DataFrame([asdict(r) for r in rows])
-        return df[['fecha', 'detalles', 'retiros', 'abonos', 'saldo']]
+        df = pd.DataFrame([asdict(r) for r in rows], columns=['fecha', 'detalles', 'retiros', 'abonos', 'saldo'])
+        return df

@@ -248,8 +248,9 @@ logger = logging.getLogger(__name__)
 
 # Constantes y regex compilados
 # El render/OCR mete ruido entre fecha y folio ("|", "/", "(", "}") y a veces
-# confunde 0 con O, por eso se toleran separadores y se normaliza después.
-SEP = r"[\s|/\\(){}\[\]!,.]*"
+# confunde 0 con O, por eso se toleran separadores (incluido '_', p. ej.
+# "06-ENE-2025_9331569") y se normaliza después.
+SEP = r"[\s|/\\(){}\[\]!,._':;-]*"
 DATE_FOLIO_PATTERN = re.compile(
     rf"^\s*[(|/]?\s*(?P<fecha>[\dO]{{2}}-[A-Za-z0]{{3}}-\d{{4}}){SEP}(?P<folio>[\dO]{{7,9}})(?!\d)",
     flags=re.IGNORECASE,

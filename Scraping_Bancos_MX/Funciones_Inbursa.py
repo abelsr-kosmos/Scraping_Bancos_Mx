@@ -296,7 +296,14 @@ class InbursaExtractor:
         df = self._infer_amount_sign_from_balance(df)
         df = self._add_withdrawals_deposits(df)
 
-        return df[["fecha", "descripcion", "retiros", "depositos", "saldo"]]
+        # La fila BALANCE INICIAL solo sirve de saldo previo para inferir el signo del
+        # primer movimiento; no es un movimiento, así que no sale en el resultado.
+        df = df[~df["descripcion"].str.fullmatch(r"\s*BALANCE INICIAL\s*", case=False)]
+
+        # Mismo esquema que el resto de los bancos: deposito/retiro (0.0 si vacío)
+        df = df.rename(columns={"retiros": "retiro", "depositos": "deposito"})
+        df[["deposito", "retiro"]] = df[["deposito", "retiro"]].fillna(0.0)
+        return df[["fecha", "descripcion", "deposito", "retiro", "saldo"]].reset_index(drop=True)
 
     # -------------------------
     # Step 1: Read PDF
@@ -391,15 +398,14 @@ class InbursaExtractor:
 
     def _fix_date(self, date_raw: str, year: int) -> str:
         """
-        Convierte "ABR 28" -> "28 ABR 2022"
-        (mantengo tu formato porque parece lo que quieres visualizar)
+        Convierte "ABR 28" -> "28/ABR/2022" (dd/MMM/aaaa, igual que BBVA)
         """
         parts = date_raw.split()
         if len(parts) != 2:
             return f"{date_raw} {year}".strip()
 
         mon, day = parts[0].rstrip("."), parts[1]
-        return f"{day} {mon} {year}"
+        return f"{int(day):02d}/{mon.upper()}/{year}"
 
     def _build_description(self, ref: str, concept: str, between_text: str) -> str:
         parts = []

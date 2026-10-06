@@ -313,7 +313,7 @@ class ParserTransacciones:
             return None
 
         dd, mes, anio = coincidencia.group('fecha').upper().split('-')
-        fecha = f"{dd.replace('O', '0')}-{mes.replace('0', 'O')}-{anio}"
+        fecha = f"{dd.replace('O', '0')}/{mes.replace('0', 'O')}/{anio}"
         folio = coincidencia.group('folio').upper().replace('O', '0')
 
         # Los montos van en la primera línea (texto de pdftotext) o en las líneas

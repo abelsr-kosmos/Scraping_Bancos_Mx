@@ -247,7 +247,7 @@ def extraer_movimientos_pagina(caracteres,texto):
     return filas
 
 def incluir_anio_mes(filas,texto):
-    anios = {"ENERO":1,"FEBRERO":2,"MARZO":3,"ABRIL":4,"MAYO":5,"JUNIO":6,"JULIO":7,"AGOSTO":8,"SEPTIEMBRE":9,"OCTUBRE":10,"NOVIEMBRE":11,"DICIEMBRE":12}
+    anios = {"ENERO":"ENE","FEBRERO":"FEB","MARZO":"MAR","ABRIL":"ABR","MAYO":"MAY","JUNIO":"JUN","JULIO":"JUL","AGOSTO":"AGO","SEPTIEMBRE":"SEP","OCTUBRE":"OCT","NOVIEMBRE":"NOV","DICIEMBRE":"DIC"}
     periodo = re.search(r"del\d{2}al\d{2}de\w+\d{4}",texto)
     if not periodo:
         return
@@ -257,7 +257,7 @@ def incluir_anio_mes(filas,texto):
     mes = periodo[:-4]
     mes = anios[mes.upper()]
     mask_fechas = filas["Fecha"].astype(str).str.match(RE_FECHA)
-    filas.loc[mask_fechas, "Fecha"] = filas.loc[mask_fechas, "Fecha"] + "/" + str(mes) + "/" + str(anio)
+    filas.loc[mask_fechas, "Fecha"] = filas.loc[mask_fechas, "Fecha"] + "/" + mes + "/" + str(anio)
 
 
 

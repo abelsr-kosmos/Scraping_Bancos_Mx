@@ -18,6 +18,8 @@ def es_linea_movimiento(linea):
     - tokens[1] = mes (2 dígitos)
     - tokens[2] = año (4 dígitos)
     """
+    if not linea.split():
+        return False
     tokens = linea.split()[0].split('/')
     if len(tokens) < 3:
         return False
@@ -33,15 +35,15 @@ def es_linea_movimiento(linea):
 
 def parse_linea_movimiento(linea):
     fecha = linea.split()[0]
-    linea = linea.replace(fecha, '')
+    linea = linea.replace(fecha, '', 1)
     
     # patron para extraer el monto algo similar a (+) $50,000.00
     pattern = r'\(\s*(?P<sign>[+-])\s*\)\s*\$\s*(?P<amount>(?:\d{1,3}(?:,\d{3})*|\d+)(?:\.\d{2})?)'
     match = re.search(pattern, linea)
 
     if match:
-        # Quita el match de la linea
-        linea = linea.replace(match.group(0), '')
+        # Quita el monto de la linea, conservando el texto antes y después
+        linea = linea[:match.start()] + ' ' + linea[match.end():]
         sign = match.group('sign')
         amount = match.group('amount')
         amount = amount.replace(',', '')
@@ -53,25 +55,49 @@ def parse_linea_movimiento(linea):
     else:
         monto = None
     
-    return fecha, monto, linea
+    return fecha, monto, _limpiar_texto(linea)
+
+# Máximo de líneas de continuación que se pegan a un movimiento (evita
+# arrastrar pies de página si no se pueden distinguir)
+MAX_LINEAS_CONTINUACION = 3
+PIE_PAGINA_RE = re.compile(r'(?i)^\s*(?:p[aá]gina\s+\d+|\d+\s*(?:de|/)\s*\d+\s*$)|\$\s*\d')
+
+
+def _limpiar_texto(texto):
+    """Colapsa espacios y quita '|' y espacios sobrantes en los extremos."""
+    return re.sub(r'[\s|]+', ' ', texto).strip()
 
 def procesar_pdf(pdf_path):
     with pdfplumber.open(pdf_path) as pdf:
         movimientos = []
         for i, page in enumerate(pdf.pages):
-            for line in page.extract_text().split('\n'):
+            # Las líneas que no inician con fecha (descripción partida en varias
+            # líneas) se anexan al movimiento anterior de la misma página
+            n_cont = 0
+            actual = None
+            for line in (page.extract_text() or '').split('\n'):
                 if es_linea_movimiento(line):
                     fecha, monto, linea = parse_linea_movimiento(line)
-                    movimientos.append({
+                    actual = {
                         "Fecha": fecha,
                         "Descripcion": linea,
                         "Monto": monto
-                    })
+                    }
+                    movimientos.append(actual)
+                    n_cont = 0
+                elif actual is not None and n_cont < MAX_LINEAS_CONTINUACION:
+                    extra = _limpiar_texto(line)
+                    if not extra or PIE_PAGINA_RE.search(extra):
+                        # Línea vacía o pie de página/otros montos: termina el movimiento
+                        actual = None if extra else actual
+                        continue
+                    actual["Descripcion"] = _limpiar_texto(actual["Descripcion"] + ' ' + extra)
+                    n_cont += 1
         if len(movimientos) == 0:
             raise Exception("Could not extract data from pdf")
         df = pd.DataFrame(movimientos)
-        df["Retiro"] = df["Monto"].apply(lambda x: x if x < 0 else None)
-        df["Deposito"] = df["Monto"].apply(lambda x: x if x > 0 else None)
+        df["Retiro"] = df["Monto"].apply(lambda x: x if x is not None and x < 0 else None)
+        df["Deposito"] = df["Monto"].apply(lambda x: x if x is not None and x > 0 else None)
         df["Saldo"] = [None] * len(df)
         df = df[["Fecha", "Descripcion", "Deposito", "Retiro", "Saldo"]]
         return df
@@ -144,7 +170,9 @@ class BancoAztecaStatementParser:
 
             desc_start = date_in_block.end()  # justo después de la fecha
             desc_end = sign_pos.start()
-            descripcion = block[desc_start:desc_end].replace('\n', ' ').strip()
+            # Texto antes y después del monto (la descripción puede continuar tras él)
+            despues = block[monto_match.end():] if monto_match.end() >= desc_end else ''
+            descripcion = re.sub(r'[\s|]+', ' ', block[desc_start:desc_end] + ' ' + despues).strip()
 
             # Normalizamos el monto: "$12,311.31" -> 12311.31
             monto_val = self._money_to_float(monto_str)

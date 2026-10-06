@@ -94,10 +94,20 @@ def _es_inicio_pie_pagina(linea: List[dict]) -> bool:
     movimientos reales (no solo al pie de página)."""
     if len(linea) < 2:
         return False
-    primeras = (linea[0]["text"], linea[1]["text"])
-    if primeras[0] == "Estimado" and primeras[1].startswith("Cliente"):
+    textos = [w["text"] for w in linea]
+    if textos[0] == "Estimado" and textos[1].startswith("Cliente"):
         return True
-    if primeras[0] == "BBVA" and primeras[1].startswith("MEXICO"):
+    # Una línea de descripción puede empezar con "BBVA MEXICO" (banco
+    # contraparte); solo es el aviso legal si trae la razón social completa.
+    if textos[0] == "BBVA" and textos[1].startswith("MEXICO") and len(textos) >= 3 and textos[2].startswith("S.A"):
+        return True
+    # Número de hoja ("Hoja 3 de 42") y leyenda del CFDI al pie de la página
+    if len(textos) >= 4 and textos[0] == "Hoja" and textos[1].isdigit() and textos[2] == "de":
+        return True
+    if "REPRESENTACIÓN" in textos and "IMPRESA" in textos:
+        return True
+    # Resumen final ('Total de Movimientos', 'TOTAL IMPORTE CARGOS ...')
+    if textos[0].lower() == "total" and textos[1].lower() in ("de", "importe"):
         return True
     return False
 
@@ -108,8 +118,11 @@ def _es_linea_de_totales(linea: List[dict]) -> bool:
     segmento de la tabla. No empieza con fecha/día, así que sin este filtro
     se pega como continuación de texto del último movimiento real y sus
     montos terminan rellenando campos vacíos de esa fila (cargo/abono que no
-    le pertenecen)."""
-    return bool(linea) and linea[0]["text"].strip().lower() == "total"
+    le pertenecen). Solo cuenta como totales si el resto de la fila son
+    montos: una continuación de descripción que empiece con 'Total' se conserva."""
+    if not linea or linea[0]["text"].strip().lower() != "total":
+        return False
+    return all(RE_MONTO.match(w["text"]) for w in linea[1:])
 
 
 def _nuevo_movimiento(fecha: str) -> Dict:
@@ -197,14 +210,19 @@ def _cm_asignar_palabra(movimiento: Dict, tipo: str, texto: str) -> None:
         # de un renglón de continuación que cayera por coincidencia en este
         # rango de columna podría pisar el saldo ya correcto del renglón
         # inicial del movimiento.
-        if not movimiento.get("_saldo_liquidacion_fijado") and RE_MONTO.match(texto):
+        if not RE_MONTO.match(texto):
+            movimiento["descripcion_partes"].append(texto)
+        elif not movimiento.get("_saldo_liquidacion_fijado"):
             movimiento["saldo"] = texto
             movimiento["_saldo_liquidacion_fijado"] = True
         return
     if tipo == "saldo_operacion":
         tipo = "saldo"
-    if tipo in ("retiro", "deposito", "saldo") and RE_MONTO.match(texto):
-        if movimiento[tipo] is None:
+    if tipo in ("retiro", "deposito", "saldo"):
+        if not RE_MONTO.match(texto):
+            # Palabra no numérica en una zona de monto: es texto del movimiento
+            movimiento["descripcion_partes"].append(texto)
+        elif movimiento[tipo] is None:
             movimiento[tipo] = texto
 
 
@@ -301,8 +319,11 @@ def _un_asignar_palabra(movimiento: Dict, tipo: str, texto: str) -> None:
     if tipo in ("folio", "concepto"):
         movimiento["descripcion_partes"].append(texto)
         return
-    if tipo in ("deposito", "retiro", "saldo") and RE_MONTO.match(texto):
-        if movimiento[tipo] is None:
+    if tipo in ("deposito", "retiro", "saldo"):
+        if not RE_MONTO.match(texto):
+            # Palabra no numérica en una zona de monto: es texto del movimiento
+            movimiento["descripcion_partes"].append(texto)
+        elif movimiento[tipo] is None:
             movimiento[tipo] = texto
 
 

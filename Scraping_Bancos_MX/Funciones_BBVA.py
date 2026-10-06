@@ -13,6 +13,9 @@ def Scrap_Estado_BBVA(ruta_archivo):
     tabla2 = analisis_movimientos(tabla)
     tabla2 = tabla2[['Fecha', 'Concepto', 'Origen', 'Deposito', 'Retiro','Saldo']]
     tabla2['descripcion'] = tabla2['Concepto'] + ' ' + tabla2['Origen']
+    # Separador único: un espacio (sin '|' de unión de líneas) y sin espacios repetidos
+    tabla2['descripcion'] = (tabla2['descripcion'].str.replace('|', ' ', regex=False)
+                             .str.replace(r'\s+', ' ', regex=True).str.strip())
     tabla2 = tabla2.drop(['Concepto', 'Origen'], axis=1)
     tabla2.columns = tabla2.columns.str.lower()
     try:
@@ -146,6 +149,26 @@ def limpiar_ultima_pagina(df):
 
     return df
 
+# Texto de pie de página (aviso "Estimado Cliente...", GAT, domicilio de BBVA) que
+# en la primera página cae entre el último movimiento y el fin de la hoja. Se
+# compara sin espacios porque el render parte las palabras entre celdas.
+PIE_PAGINA = re.compile(r"^(Estimado|SuEstado|Tambi[eé]nleinformamos|elcualpuede|ConBBVA|LaGAT|BBVAM|Av\.?Paseo)",
+                        flags=re.IGNORECASE)
+
+def quitar_pies(df):
+    """Elimina las filas de pie de página que quedarían pegadas al último movimiento
+    (desde la primera línea de pie hasta la siguiente fila con fecha de operación)."""
+    df = df.copy()
+    en_pie = False
+    for index,row in df.iterrows():
+        if re.search(r"\d{1,2}\/\w{3}",row["Operacion"]):
+            en_pie = False
+        elif PIE_PAGINA.match("".join(row[["Operacion","Fecha","Descripcion"]]).replace(" ","")):
+            en_pie = True
+        if en_pie:
+            df.drop(index, inplace=True)
+    return df
+
 def limpiar_paginas(df):
     df = df.copy()
     eliminar_celdas_vacias = True
@@ -205,13 +228,23 @@ def inicializar_movimientos(df_movimientos):
 def unificar_movimientos(df):
     df = df.copy()
     descripcion = ""
-    for index,fila in df.iterrows():
-        descripcion = descripcion + "|" + fila["Descripcion"]
+    for pos,(index,fila) in enumerate(df.iterrows()):
+        # El texto que empieza a la izquierda de la columna de descripción cae en la celda
+        # "Fecha" (código de operación en la 1a línea, p. ej. "CB" + "1 IVA...", o las
+        # primeras letras de la línea de continuación, p. ej. "Re" + "f. P0Q6..."), y el
+        # que desborda a la derecha cae en Cargo/Abono en las líneas de continuación.
+        # Se reconstruye la línea completa en orden de lectura (sin el año agregado).
+        izq = re.sub(r"\/\d{4}$", "", fila["Fecha"])
+        if pos == 0:
+            linea = re.sub(r"^\s*\d{0,2}\/[A-Za-z]{3}", "", izq) + fila["Descripcion"]
+        else:
+            der = "".join(c for c in (fila["Cargo"], fila["Abono"])
+                          if not re.fullmatch(r"\s*[\d,]+\.\d{2}\s*", c))
+            linea = izq + fila["Descripcion"] + der
+        descripcion = descripcion + "|" + linea
 
-    try:
-        referencia = df.iloc[1,3]
-    except:
-        referencia = " - "
+    # Todas las líneas de continuación ya van en "Descripcion"
+    referencia = ""
     moviemiento = {"Operacion":df.iloc[0,0],"Fecha":df.iloc[0,1],"Descripcion":descripcion,"Referencia":referencia, "Cargo":df.iloc[0,3],"Abono":df.iloc[0,4],"Movimiento":df.iloc[0,5]}
     return moviemiento
 
@@ -264,7 +297,7 @@ def analizar_estados(documento):
             movimientos = True
             # Extraer Fecha o Periodo
             df = operar_pagina(pagina)
-            df = limpiar_primera_pagina(df)
+            df = quitar_pies(limpiar_primera_pagina(df))
             anio_inicio = extraer_fecha_primera_pagina(pagina)
             df = incluir_anios(df, anio_inicio)
             df_movimientos = pd.concat([df_movimientos, df], ignore_index=True)
@@ -272,7 +305,7 @@ def analizar_estados(documento):
         
         elif re.search("TotaldeMovimientos", texto) and re.search("TOTALMOVIMIENTOSCARGOS", texto):
             df = operar_pagina(pagina)
-            df = limpiar_ultima_pagina(df)
+            df = quitar_pies(limpiar_ultima_pagina(df))
             df = incluir_anios(df, anio_inicio)
             df_movimientos = pd.concat([df_movimientos, df], ignore_index=True)
             movimientos = False
@@ -280,7 +313,7 @@ def analizar_estados(documento):
         
         if movimientos:
             df = operar_pagina(pagina)
-            df = limpiar_paginas(df)
+            df = quitar_pies(limpiar_paginas(df))
             df = incluir_anios(df, anio_inicio)
             df_movimientos = pd.concat([df_movimientos, df], ignore_index=True)
         
@@ -466,7 +499,7 @@ class BBVAExtractor:
                           
             movimientos.append({
                 "fecha":      fecha,
-                "descripcion": fragment[14:200],
+                "descripcion": re.sub(r'[\s|]+', ' ', re.sub(self.double_date_pattern, '', fragment, count=1)).strip(),
                 "monto":      montos[0],
                 "saldo":      montos[2] if len(montos)>2 else None,
                 "geometry":   geoms

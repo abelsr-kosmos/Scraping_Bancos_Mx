@@ -221,6 +221,8 @@ def procesar_pdf(pdf_path):
 
         start_reading = False
         stop_reading = False
+        RE_ENCABEZADO = re.compile(
+            r"^(CLIENTE:\s*\d+|DETALLE DE OPERACIONES|FECHA CONCEPTO RETIROS|\d{6}\.\w+\.OD\.\d{4}\.\d{2})")
         periodo = extraer_periodo(periodo_texto)
 
         todos_los_movimientos = []
@@ -256,6 +258,12 @@ def procesar_pdf(pdf_path):
                 lineas_dict[top_approx].append(w)
 
             lineas_ordenadas = sorted(lineas_dict.items(), key=lambda x: x[0])
+
+            # Encabezado repetido en cada hoja (CLIENTE, Página, razón social, "DETALLE DE
+            # OPERACIONES", "FECHA CONCEPTO RETIROS...") y clave de pie ("000180.B06CHDA...");
+            # si no se omiten, se pegan a la descripción del movimiento que cruza la hoja.
+            top_encabezado = next((t for t, ws in lineas_ordenadas
+                                   if "FECHA CONCEPTO RETIROS" in " ".join(w['text'] for w in ws).upper()), None)
 
             for top_val, words_in_line in lineas_ordenadas:
                 if stop_reading:
@@ -295,6 +303,11 @@ def procesar_pdf(pdf_path):
                 # Omitir líneas con skip_phrases
                 if any(sp in line_text_upper for sp in skip_phrases):
                     continue
+                # Encabezado/pie que se repite en cada hoja y se cuela en medio de
+                # la descripción del movimiento que cruza de página
+                # (solo se omite su texto: un monto puede caer en la misma línea)
+                es_encabezado = (bool(RE_ENCABEZADO.search(line_text_upper))
+                                 or (top_encabezado is not None and top_val <= top_encabezado))
 
                 # ¿Es un nuevo movimiento? => tokens[0] = dd, tokens[1] = mmm
                 if es_linea_movimiento(line_text_upper):
@@ -306,6 +319,7 @@ def procesar_pdf(pdf_path):
                     movimiento_actual = {
                         "Fecha": f"{tokens_line[0]} {tokens_line[1]}",
                         "Descripcion": "",
+                        "DescSigno": "",
                         "Monto": monto_pendiente["Monto"],
                         "Saldo": monto_pendiente["Saldo"],
                     }
@@ -317,6 +331,7 @@ def procesar_pdf(pdf_path):
                         movimiento_actual = {
                             "Fecha": None,
                             "Descripcion": "",
+                            "DescSigno": "",
                             "Monto": None,
                             "Saldo": None
                         }
@@ -329,24 +344,32 @@ def procesar_pdf(pdf_path):
                 # cierre este movimiento nadie reclamó el buffer, se pierde,
                 # que es preferible a asignárselo al movimiento equivocado.
                 destino = movimiento_actual if MONTO_EN_BLOQUE else (movimiento_actual if es_linea_nueva else monto_pendiente)
-                for w in words_in_line:
+                for i_w, w in enumerate(words_in_line):
                     txt = w['text'].strip()
                     center_w = (w['x0'] + w['x1']) / 2
 
-                    if es_numero_monetario(txt):
+                    if es_numero_monetario(txt) and center_w > 260 and center_w != 415:
                         val = parse_monetario(txt)
                         # Límite (centro x) calibrado contra estados reales:
                         # SALDO ~452, con margen amplio por debajo para el
                         # monto (Cargos/Abonos ~283-380, según el estado).
-                        if center_w > 260 and center_w < 415:
+                        if center_w < 415:
                             destino["Monto"] = val
-                        elif center_w > 415:
+                        else:
                             destino["Saldo"] = val
+                    elif es_encabezado:
+                        # fuera de la descripción, pero sí cuenta para deducir el signo
+                        movimiento_actual["DescSigno"] += " " + txt
+                        continue
                     else:
-                        # Texto al concepto (omitir dd y mmm)
-                        if re.match(r'^\d{1,2}$', txt) or txt in MESES_CORTOS:
+                        # Texto al concepto: solo se omite la fecha (dd mmm) con la
+                        # que abre el movimiento; "CAJA 3", "SUC 12" y demás números
+                        # sueltos del concepto se conservan, igual que los montos
+                        # fuera de las columnas de monto/saldo.
+                        if es_linea_nueva and i_w < 2:
                             continue
                         movimiento_actual["Descripcion"] += " " + txt
+                        movimiento_actual["DescSigno"] += " " + txt
 
         # Al terminar
         if movimiento_actual:
@@ -356,9 +379,12 @@ def procesar_pdf(pdf_path):
     # =======================
     # 5) GUARDAR EN EXCEL
     # =======================
+    for mov in todos_los_movimientos:
+        mov["Descripcion"] = re.sub(r"\s+", " ", mov["Descripcion"].replace("|", " ")).strip()
     df = pd.DataFrame(todos_los_movimientos, columns=[
         "Fecha",
         "Descripcion",
+        "DescSigno",
         "Monto",
         "Saldo",
     ])
@@ -385,7 +411,9 @@ def procesar_pdf(pdf_path):
     for _, fila in df.iterrows():
         monto = fila["Monto"]
         saldo_actual = fila["Saldo"]
-        descripcion = fila["Descripcion"] or ""
+        # El signo se deduce con el mismo texto que antes (incluye el encabezado de hoja
+        # que cruza el movimiento) para no cambiar retiro/deposito al limpiar la descripción.
+        descripcion = fila["DescSigno"] or ""
         if pd.isna(monto):
             monto = None
         if pd.isna(saldo_actual):
@@ -423,7 +451,7 @@ def procesar_pdf(pdf_path):
 
     df["Retiro"] = retiro
     df["Deposito"] = deposito
-    df = df.drop(columns=["Monto"])
+    df = df.drop(columns=["Monto", "DescSigno"])
     df = df[df["Retiro"].notna() | df["Deposito"].notna() | df["Saldo"].notna()]
 
     return df
@@ -477,10 +505,14 @@ class TransactionsParser:
             return None
 
         # Limpiar descripción
-        description = block.replace(fecha, "")
-        for monto in montos:
-            description = description.replace(monto, "")
-        description = description.replace("\n", " ").strip()
+        # Solo se quita la fecha inicial y las dos cifras que son monto y saldo
+        # (su última aparición); otras cifras o repeticiones del texto se conservan.
+        description = block.replace(fecha, "", 1)
+        for monto in montos[-2:]:
+            pos = description.rfind(monto)
+            if pos != -1:
+                description = description[:pos] + description[pos + len(monto):]
+        description = re.sub(r"\s+", " ", description.replace("|", " ")).strip()
 
         return {
             "fecha": fecha,

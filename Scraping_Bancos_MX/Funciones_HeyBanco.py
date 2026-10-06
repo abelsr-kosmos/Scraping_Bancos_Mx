@@ -20,8 +20,16 @@ def analisis_movimientos(df):
     df = normalizar_tabla(df)
     return df
 
+def compactar_descripcion(*partes):
+    # Une las partes con un solo espacio, quitando '|' sueltos y espacios repetidos
+    texto = " ".join(str(parte) for parte in partes if parte is not None)
+    texto = texto.replace("|", " ")
+    return re.sub(r"\s+", " ", texto).strip()
+
 def normalizar_tabla(df):
     df = df.drop('Movimiento', axis=1)
+    # Las lineas del movimiento se unen con '|' internamente; en la salida solo espacios
+    df["Concepto"] = [compactar_descripcion(concepto) for concepto in df["Concepto"]]
     return normalizar_columnas_estandar(df)
 
 def analisis_concepto(df):
@@ -230,9 +238,10 @@ def eliminar_movimientos_no_deseados(filas):
         if index > 0:
             if row["Fecha"] == "DIA":
                 filas = filas[filas["Top"] > row["Top"]]
-            elif  re.search("Page" ,row["Saldo"]):
+            elif  re.match(r"\s*Page" ,row["Saldo"]):
                 filas = filas[filas["Top"] < row["Top"]]
-            elif re.search("Total",row["Concepto"]):
+            elif re.match(r"\s*Total\b",row["Concepto"]):
+                # Solo la fila de totales (la linea inicia con "Total"), no un concepto que lo mencione
                 filas = filas[filas["Top"] < row["Top"]]
 
 

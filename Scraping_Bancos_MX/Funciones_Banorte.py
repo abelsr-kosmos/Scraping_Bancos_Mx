@@ -12,15 +12,10 @@ def Scrap_Estado_Banorte(ruta_archivo):
     tabla = analizar_estados(estado)
     tabla2 = analisis_movimientos(tabla)
     tabla2.columns = [col.lower() for col in tabla2.columns]
-    tabla2['descripcion'] = tabla2['concepto'] + " | " + tabla2['origen'] + " | " + tabla2['conceptomovimiento']
-    tabla2['descripcion'] = (
-        tabla2['descripcion']
-        .astype(str)
-        .str.replace(r'[\t\r\n]+', ' ', regex=True)
-        .str.replace(r'\s+', ' ', regex=True)
-        .str.strip(' |')      # quita espacios y pipes extremos
-        .str.slice(0, 256)    # limita a 256 caracteres
-    )
+    tabla2['descripcion'] = [
+        construir_descripcion(concepto, origen, concepto_mov)
+        for concepto, origen, concepto_mov in zip(tabla2['concepto'], tabla2['origen'], tabla2['conceptomovimiento'])
+    ]
     tabla2 = tabla2[['fecha', 'descripcion', 'deposito', 'retiro', 'saldo']]
     try:
         tabla2['deposito'] = pd.to_numeric(tabla2['deposito'].str.replace(r'[^0-9.,]', '', regex=True).str.replace(',', ''), errors='coerce')
@@ -38,6 +33,24 @@ def Scrap_Estado_Banorte(ruta_archivo):
 
             
 
+
+def construir_descripcion(concepto, origen, concepto_mov):
+    """Concepto + origen + concepto del movimiento, separados por un espacio.
+    El concepto del movimiento ('-' si no aplica) se omite cuando ya esta
+    contenido en el concepto (ignorando espacios, pipes y digitos)."""
+    def limpiar(texto):
+        return re.sub(r'\s+', ' ', str(texto).replace('|', ' ').replace('\t', ' ')).strip()
+
+    def clave(texto):
+        return re.sub(r'[\s\d]+', '', texto)
+
+    concepto, origen, concepto_mov = limpiar(concepto), limpiar(origen), limpiar(concepto_mov)
+    partes = [concepto]
+    if origen and origen != '-' and clave(origen) not in clave(concepto):
+        partes.append(origen)
+    if concepto_mov and concepto_mov != '-' and clave(concepto_mov) not in clave(' '.join(partes)):
+        partes.append(concepto_mov)
+    return re.sub(r'\s+', ' ', ' '.join(partes)).strip(' |')
 
 def analisis_movimientos(df):
     df = df.copy()
@@ -342,6 +355,14 @@ class BanorteStatementParser:
 
             # La descripción: tomamos la primera línea del bloque sin la fecha
             descripcion = block_lines[0].replace(current_date, '').strip()
+            # Lineas de continuacion del bloque (hasta el pie de pagina, si lo hay)
+            for linea in block_lines[1:]:
+                linea = linea.strip()
+                if re.match(r'(Directa|P[áa]gina|SALDO|TOTAL)', linea, re.IGNORECASE):
+                    break
+                if linea:
+                    descripcion += ' ' + linea
+            descripcion = re.sub(r'\s+', ' ', descripcion.replace('|', ' ')).strip()
 
             # Tomamos cantidades del inicio del bloque (recorte evita agarrar de más)
             amounts = re.findall(self.AMOUNT_PATTERN, block_text[:250])

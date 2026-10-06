@@ -20,6 +20,11 @@ class BancoppelMovimientosExtractor:
     # Grupos: 1=Fecha, 2=ParteDescripcion, 3=Monto, 4=Saldo
     pattern: str = r'(\d{2}/\d{2})\s+(.+?)\s+([\d,]+\.\d{2})\s+([\d,]+\.\d{2})'
 
+    # Inicio de las líneas de pie de página que no son parte de un movimiento
+    pie_pagina: re.Pattern = re.compile(
+        r'^\s*(P[aá]gina\s+\d|Hoja\s+\d|\d+\s*(/|de)\s*\d+\s*$|Banco\s+Coppel|BanCoppel|Unidad\s+Especializada|'
+        r'Este\s+documento|Estado\s+de\s+cuenta)', flags=re.IGNORECASE | re.MULTILINE)
+
     def read_pdf_text(self, pdf_path: str) -> List[str]:
         """Lee el PDF y regresa una lista con el texto de cada página."""
         all_text: List[str] = []
@@ -58,6 +63,11 @@ class BancoppelMovimientosExtractor:
                     # Si no hay siguiente match, tomamos el resto de la línea o bloque
                     # (Aquí asumimos el comportamiento lógico de capturar hasta el final del contexto relevante)
                     text_between = remaining
+                    # Último movimiento de la hoja: el resto de la página incluye el pie
+                    # (paginación, leyendas legales); se corta en la primera línea de pie.
+                    pie = self.pie_pagina.search(text_between)
+                    if pie:
+                        text_between = text_between[:pie.start()]
                 
                 # Procesar grupos del match actual
                 date = match.group(0).split()[0]
@@ -80,7 +90,7 @@ class BancoppelMovimientosExtractor:
                 base_desc = ' '.join(desc_parts)
                 
                 # Descripción completa
-                full_desc = base_desc + ' ' + text_between.strip()
+                full_desc = re.sub(r'[\s|]+', ' ', base_desc + ' ' + text_between).strip()
                 
                 movimientos.append({
                     'fecha': date_val,

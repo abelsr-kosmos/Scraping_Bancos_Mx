@@ -12,7 +12,7 @@ RE_COMISION = re.compile(r"COMISION", re.IGNORECASE)
 RE_COM = re.compile(r"COM\.")
 RE_TRASPASO = re.compile(r"TRASPASO")
 RE_RFC = re.compile(r"RFC")
-RE_PAGE = re.compile(r"Page")
+RE_PAGE = re.compile(r"^\s*Page")
 RE_FECHA = re.compile(r"\d{2}")
 RE_NOSPACE = re.compile(r"\s+")
 TABLE_SENTINEL = "DIACONCEPTOCARGOSABONOSSALDO"
@@ -39,7 +39,13 @@ def formatear_tabla(df):
     # Saldo -> saldo
     df = df.rename(columns={"Saldo": "saldo"})
     # Quita | a la descripcion
-    df["descripcion"] = df["descripcion"].str.replace("|", " ", regex=False)
+    # y colapsa espacios repetidos / recorta extremos
+    df["descripcion"] = (
+        df["descripcion"].astype(str)
+        .str.replace("|", " ", regex=False)
+        .str.replace(RE_NOSPACE, " ", regex=True)
+        .str.strip()
+    )
 
     for col in ["deposito", "retiro", "saldo"]:
         serie = (

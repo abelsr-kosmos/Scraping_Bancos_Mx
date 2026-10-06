@@ -34,6 +34,23 @@ def Scrap_Estado_BanBajio(ruta_archivo):
     tabla = formatear_tabla(tabla)
     return tabla
 
+RE_MONTO_TEXTO = re.compile(r"\$\s*-?[\d,]+(?:\.\d{2})?-?")
+
+
+def _quitar_montos_propios(concepto):
+    """Quita solo el monto y el saldo del movimiento (los últimos dos '$' de la
+    línea con fecha); los importes citados dentro de la descripción se conservan."""
+    segmentos = str(concepto).split("|")
+    for i, segmento in enumerate(segmentos):
+        montos = list(RE_MONTO_TEXTO.finditer(segmento))
+        if not montos:
+            continue
+        for m in reversed(montos[-2:]):
+            segmento = segmento[:m.start()] + " " + segmento[m.end():]
+        segmentos[i] = segmento
+        break
+    return "|".join(segmentos)
+
 def formatear_tabla(df):
     df = df.copy()
     origen = (
@@ -48,8 +65,9 @@ def formatear_tabla(df):
         .fillna("-")
         .astype(str)
         .replace({"nan": "-", "None": "-"})
-        .str.replace(r"\$\s*-?[\d,]+(?:\.\d{2})?", " ", regex=True)
+        .map(_quitar_montos_propios)
         .str.replace("|", " ", regex=False)
+        .str.replace(r"°\d{4}°", " ", regex=True)  # marcador interno del año
         .str.replace(r"\s+", " ", regex=True)
         .str.strip()
     )
@@ -91,7 +109,15 @@ def _extraer_movimientos_desde_texto(texto_pagina, anio_fallback=None):
         texto = texto.split("\n")
         texto = texto[2:]
         if ultima_pagina:
-            texto = texto[:-3]
+            # Antes se quitaban siempre las últimas 3 líneas; ahora solo se
+            # descarta el movimiento incompleto del final (desde su línea con
+            # fecha) y se conservan las líneas de detalle del movimiento previo.
+            cola = texto[-3:]
+            fechas_cola = [i for i, linea in enumerate(cola) if re.match(r"\d{1,2} \w{3}", linea)]
+            if fechas_cola:
+                texto = texto[:len(texto) - 3 + fechas_cola[0]]
+            else:
+                texto = texto[:-1] if texto and not texto[-1].strip() else texto
         if periodo and periodo.isdigit() and len(periodo) == 4:
             texto.append(f"°{periodo}°")
         return texto
@@ -105,7 +131,8 @@ def scrap_movimientos(movimientos):
             continue
 
         movimiento_mayus = str(movimiento).upper()
-        if any(marcador in movimiento_mayus for marcador in MARCADORES_FIN_MOVIMIENTOS):
+        # Los marcadores solo cuentan al inicio de la línea (no dentro de una descripción)
+        if any(movimiento_mayus.lstrip().startswith(marcador) for marcador in MARCADORES_FIN_MOVIMIENTOS):
             break
 
         if re.match(r"\d{1,2} \w{3}",movimiento):

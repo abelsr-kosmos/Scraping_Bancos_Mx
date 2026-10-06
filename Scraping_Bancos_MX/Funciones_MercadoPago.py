@@ -45,17 +45,17 @@ class EstadoCuentaMovimientosExtractor:
         return matches
 
     def _clean_description(self, transaction_text: str) -> str:
-        """Remueve fecha, dinero y hora; deja descripción limpia."""
+        """Remueve la primera fecha, el primer monto y la primera hora (van en
+        sus propias columnas); deja el resto como descripción limpia."""
         desc = transaction_text
-        desc = re.sub(self.date_pattern, "", desc)
-        desc = re.sub(self.money_pattern, "", desc)
-        desc = re.sub(self.time_pattern, "", desc)
-        desc = desc.strip()
+        desc = re.sub(self.date_pattern, "", desc, count=1)
+        desc = re.sub(self.money_pattern, "", desc, count=1)
+        desc = re.sub(self.time_pattern, "", desc, count=1)
 
         if self.collapse_spaces:
-            desc = re.sub(r"\s+", " ", desc)
+            desc = re.sub(r"[\s|]+", " ", desc)
 
-        return desc
+        return desc.strip()
 
     def extract_movimientos(self, all_text: List[str]) -> List[Dict[str, Optional[str]]]:
         """
@@ -71,8 +71,19 @@ class EstadoCuentaMovimientosExtractor:
             date_matches = list(re.finditer(self.date_pattern, page_text))
             comision_matches = list(re.finditer(self.comision_pattern, page_text))
 
-            # Empareja por orden (como en tu código)
-            for d_match, c_match in zip(date_matches, comision_matches):
+            # Cada comisión cierra un bloque, que empieza en la primera fecha
+            # posterior a la comisión anterior (así una fecha extra dentro de
+            # la descripción no desalinea los pares fecha/comisión)
+            pares = []
+            fin_previo = 0
+            for c_match in comision_matches:
+                d_match = next((d for d in date_matches if d.start() >= fin_previo), None)
+                if d_match is None or d_match.start() >= c_match.end():
+                    continue
+                pares.append((d_match, c_match))
+                fin_previo = c_match.end()
+
+            for d_match, c_match in pares:
                 block = page_text[d_match.start(): c_match.end()].replace("\n", " ")
 
                 money_m = re.search(self.money_pattern, block)
@@ -125,6 +136,10 @@ class EstadoCuentaMovimientosExtractor:
         # Selección y rename final
         df = df[["date", "time", "descripcion", "deposito", "retiro"]].copy()
         df.rename(columns={"date": "fecha", "time": "hora"}, inplace=True)
+        # La hora no tiene columna propia en la salida: se anexa a la descripción
+        df["descripcion"] = (
+            df["descripcion"] + " " + df["hora"].fillna("")
+        ).str.replace(r"[\s|]+", " ", regex=True).str.strip()
         # df with columns: fecha, hora, descripcion, deposito, retiro
         df['saldo'] = None
         df = df[['fecha', 'descripcion', 'deposito', 'retiro', 'saldo']]

@@ -23,8 +23,20 @@ def analisis_movimientos(df):
     df = normalizar_tabla(df)
     return df
 
+def compactar_descripcion(*partes):
+    # Une las partes con un solo espacio, quitando '|' sueltos y espacios repetidos
+    texto = " ".join(str(parte) for parte in partes if parte is not None)
+    texto = texto.replace("|", " ")
+    return re.sub(r"\s+", " ", texto).strip()
+
 def normalizar_tabla(df):
-    df = df.drop('Movimiento', axis=1)
+    df = df.copy()
+    # Concepto (todas las lineas del movimiento) + Origen/Referencia (columna REFERENCIA)
+    df["Concepto"] = [
+        compactar_descripcion(concepto, origen, origen_extra)
+        for concepto, origen, origen_extra in zip(df["Concepto"], df["Origen"], df["OrigenContinuacion"])
+    ]
+    df = df.drop(['Movimiento', 'OrigenContinuacion'], axis=1)
     return normalizar_columnas_estandar(df)
 
 def analisis_concepto(df):
@@ -108,6 +120,8 @@ def unificar_variaciones_altura(df):
             df.loc[index+1, "Deposito"] = df.loc[index, "Deposito"]
             df.loc[index+1, "Retiro"] = df.loc[index, "Retiro"]
             df.loc[index+1, "Saldo"] = df.loc[index, "Saldo"]
+            if df.loc[index+1, "Origen"] == "":
+                df.loc[index+1, "Origen"] = df.loc[index, "Origen"]
             df.drop(index, inplace=True)
     for index, row in df.iterrows():
          if row["Fecha"] != "" and row["Concepto"] == "" and row["Origen"] != "":
@@ -207,9 +221,10 @@ def eliminar_movimientos_no_deseados(filas):
                 # legal / sello digital del CFDI, que se extiende por toda la
                 # página y por eso mancha esa columna. Corta desde ahí.
                 filas = filas[filas["Top"] < row["Top"]]
-            elif len(row["Concepto"]) > 100:
+            elif len(row["Concepto"]) > 100 and row["Concepto"].count(" ") <= len(row["Concepto"]) // 20:
                 # Igual que arriba, pero para el caso en que la fila cae
-                # completamente fuera de la columna de fecha.
+                # completamente fuera de la columna de fecha (sello digital:
+                # cadena larga casi sin espacios; un concepto real los lleva).
                 filas = filas[filas["Top"] < row["Top"]]
             elif re.search("BALANCE INICIAL",row["Concepto"]) and index in filas.index:
                 filas = filas.drop(index)
@@ -230,9 +245,13 @@ def incluir_movimientos(df):
 def unificar_movimiento(df):
     df = df.copy()
     concepto = ""
+    origen_extra = []
     for index,fila in df.iterrows():
         concepto = concepto + "|" + fila["Concepto"]
-    moviemiento = {"Fecha": df.iloc[0,0], "Concepto": concepto, "Origen": df.iloc[0,2], "Deposito": df.iloc[0,3], "Retiro": df.iloc[0,4], "Saldo": df.iloc[0,5],"Movimiento": df.iloc[0,6]}
+        # Referencia de las filas de continuacion (la primera va en "Origen")
+        if index != df.index[0] and fila["Origen"] != "":
+            origen_extra.append(fila["Origen"])
+    moviemiento = {"Fecha": df.iloc[0,0], "Concepto": concepto, "Origen": df.iloc[0,2], "OrigenContinuacion": " ".join(origen_extra), "Deposito": df.iloc[0,3], "Retiro": df.iloc[0,4], "Saldo": df.iloc[0,5],"Movimiento": df.iloc[0,6]}
     return moviemiento
 
 def unificar_tabla(df):
@@ -323,12 +342,14 @@ class InbursaExtractor:
 
         for page in movements_pages:
             matches = list(pattern.finditer(page))
-            last_end = 0
 
             for i, match in enumerate(matches):
-                start = match.start()
-                between_text = page[last_end:start].strip() if i > 0 else ""
-                last_end = match.end()
+                # El texto entre este movimiento y el siguiente (o el final de la
+                # pagina) es la continuacion de ESTE movimiento, no del siguiente
+                if i < len(matches) - 1:
+                    between_text = page[match.end():matches[i + 1].start()].strip()
+                else:
+                    between_text = self._tail_continuation(page[match.end():])
 
                 date_raw = match.group("date") or ""  # "ABR 28"
                 date_fixed = self._fix_date(date_raw, year=year)  # "28 ABR 2022"
@@ -351,6 +372,22 @@ class InbursaExtractor:
 
         return movements
 
+    def _tail_continuation(self, tail: str) -> str:
+        """
+        Texto que sigue al último movimiento de la página: son las líneas de
+        continuación, pero antes del pie (aviso legal / CFDI), que se reconoce
+        por ser una línea muy larga o por su encabezado típico.
+        """
+        lines: List[str] = []
+        for line in tail.split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+            if len(line) > 100 or re.match(r"(n\s+)?(Si desea|Tipo Comprobante|Página:|Este documento|Tasas expresadas|A partir de|En caso de|Le recordamos|Rendimientos:)", line):
+                break
+            lines.append(line)
+        return " ".join(lines)
+
     def _fix_date(self, date_raw: str, year: int) -> str:
         """
         Convierte "ABR 28" -> "28 ABR 2022"
@@ -371,7 +408,7 @@ class InbursaExtractor:
             parts.append(concept)
         if between_text:
             parts.append(between_text)
-        return " ".join(parts).strip()
+        return re.sub(r"\s+", " ", " ".join(parts).replace("|", " ")).strip()
 
     # -------------------------
     # Step 5: DataFrame + numeric

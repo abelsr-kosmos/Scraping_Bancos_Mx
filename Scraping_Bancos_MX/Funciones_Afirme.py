@@ -20,8 +20,20 @@ def analisis_movimientos(df):
     df = normalizar_tabla(df)
     return df
 
+def compactar_descripcion(*partes):
+    # Une las partes con un solo espacio, quitando '|' sueltos y espacios repetidos
+    texto = " ".join(str(parte) for parte in partes if parte is not None)
+    texto = texto.replace("|", " ")
+    return re.sub(r"\s+", " ", texto).strip()
+
 def normalizar_tabla(df):
-    df = df.drop('Movimiento', axis=1)
+    df = df.copy()
+    # Concepto (todas las lineas del movimiento) + Origen/Referencia (primera fila y continuaciones)
+    df["Concepto"] = [
+        compactar_descripcion(concepto, origen, origen_extra)
+        for concepto, origen, origen_extra in zip(df["Concepto"], df["Origen"], df["OrigenContinuacion"])
+    ]
+    df = df.drop(['Movimiento', 'OrigenContinuacion'], axis=1)
     return normalizar_columnas_estandar(df)
 
 def analisis_concepto(df):
@@ -118,8 +130,11 @@ def analizar_estados(estado):
 def corregir_concepto(df):
     df = df.reset_index(drop=True)
     for index,row in df.iterrows():
-        if row["Fecha"] != "" and row["Concepto"] == "":
+        # La fila previa debe existir (puede haberse absorbido ya); su Origen tambien se conserva
+        if row["Fecha"] != "" and row["Concepto"] == "" and (index-1) in df.index:
             df.loc[index,"Concepto"] = df.loc[index-1,"Concepto"]
+            if df.loc[index,"Origen"] == "":
+                df.loc[index,"Origen"] = df.loc[index-1,"Origen"]
             df = df.drop(index=index-1) 
     return df
     
@@ -205,7 +220,8 @@ def eliminar_movimientos_no_deseados(filas):
             if row["Fecha"] == "Día" and contador_repeticion == 0:
                 filas = filas[filas["Top"] > row["Top"]]
                 contador_repeticion += 1
-            if  re.search("Sus ahorros" ,row["Concepto"]) or re.search("Método" ,row["Fecha"]):
+            # El aviso de pie de pagina inicia la linea; asi no se corta un concepto que solo lo menciona
+            if  re.match(r"\s*Sus ahorros" ,row["Concepto"]) or re.match(r"\s*Método" ,row["Fecha"]):
                 filas = filas[filas["Top"] < row["Top"]]
             #if  row["Fecha"] == "" and row["Concepto"] == "":
             #    filas = filas.drop(index)
@@ -232,9 +248,13 @@ def incluir_movimientos(df):
 def unificar_movimiento(df):
     df = df.copy()
     concepto = ""
+    origen_extra = []
     for index,fila in df.iterrows():
         concepto = concepto + "|" + fila["Concepto"]
-    moviemiento = {"Fecha": df.iloc[0,0], "Concepto": concepto, "Origen": df.iloc[0,2], "Deposito": df.iloc[0,3], "Retiro": df.iloc[0,4], "Saldo": df.iloc[0,5],"Movimiento": df.iloc[0,6]}
+        # Origen/Referencia de las filas de continuacion (la primera va en "Origen")
+        if index != df.index[0] and fila["Origen"] != "":
+            origen_extra.append(fila["Origen"])
+    moviemiento = {"Fecha": df.iloc[0,0], "Concepto": concepto, "Origen": df.iloc[0,2], "OrigenContinuacion": " ".join(origen_extra), "Deposito": df.iloc[0,3], "Retiro": df.iloc[0,4], "Saldo": df.iloc[0,5],"Movimiento": df.iloc[0,6]}
     return moviemiento
 
 def unificar_tabla(df):

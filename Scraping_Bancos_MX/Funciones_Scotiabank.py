@@ -59,11 +59,11 @@ def _periodo_desde_texto(texto: str) -> Optional[Tuple[int, int, int, int]]:
 
 
 def _limpiar_descripcion(concepto, origen) -> str:
-    """Une las líneas del concepto y la referencia de origen con ' | ',
+    """Une las líneas del concepto y la referencia de origen con un espacio,
     colapsando espacios y sin separadores vacíos al inicio/final."""
     partes = [p for p in str(concepto).split("|")] + [str(origen)]
     partes = [re.sub(r"\s+", " ", p).strip() for p in partes]
-    return " | ".join(p for p in partes if p)
+    return " ".join(p for p in partes if p)
 
 
 def _extraer_periodo(estado) -> Optional[Tuple[int, int, int, int]]:
@@ -335,7 +335,11 @@ def unificar_movimiento(df):
     concepto = ""
     for index,fila in df.iterrows():
         concepto = concepto + "|" + fila["Concepto"]
-    moviemiento = {"Fecha": df.iloc[0,0], "Concepto": concepto, "Origen": df.iloc[0,2], "Deposito": df.iloc[0,3], "Retiro": df.iloc[0,4], "Saldo": df.iloc[0,5], "Top": df.iloc[0,6], "Movimiento": df.iloc[0,7]}
+    # El origen puede venir en las líneas de continuación: se juntan todos,
+    # salvo fragmentos en minúsculas (texto legal del pie de página)
+    origenes = [str(o).strip() for o in df["Origen"] if not pd.isna(o) and str(o).strip() not in ("", "None")]
+    origen = " ".join(o for i, o in enumerate(origenes) if i == 0 or not re.search(r"[a-záéíóú]{2}", o))
+    moviemiento = {"Fecha": df.iloc[0,0], "Concepto": concepto, "Origen": origen, "Deposito": df.iloc[0,3], "Retiro": df.iloc[0,4], "Saldo": df.iloc[0,5], "Top": df.iloc[0,6], "Movimiento": df.iloc[0,7]}
     return moviemiento
 
 def unificar_tabla(df):
@@ -482,11 +486,11 @@ class ScotiabankMovementExtractor:
             text_block = self.render_text[start:end].strip()
             amounts = self._amount_re.findall(text_block)
 
-            # Necesitamos exactamente 2: [monto, saldo]
-            if len(amounts) != 2:
+            # Necesitamos al menos 2: [monto, saldo] (se toman los últimos dos)
+            if len(amounts) < 2:
                 continue
 
-            monto_raw, saldo_raw = amounts[0], amounts[1]
+            monto_raw, saldo_raw = amounts[-2], amounts[-1]
             monto = self._to_float_money(monto_raw)
             saldo = self._to_float_money(saldo_raw)
 
@@ -504,7 +508,7 @@ class ScotiabankMovementExtractor:
 
             rows.append({
                 "fecha": _fecha_con_anio(m.group(1), self.periodo),
-                "descripcion": self._clean_description(text_block, amounts),
+                "descripcion": self._clean_description(text_block, [monto_raw, saldo_raw]),
                 "deposito": deposito,
                 "retiro": retiro,
                 "saldo": saldo,

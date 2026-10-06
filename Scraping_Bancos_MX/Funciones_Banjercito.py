@@ -20,6 +20,10 @@ COL_BOUNDS = {
 }
 
 HAS_NUMERIC_RE = re.compile(r"^[\d,.]+$")
+# Columnas "Oper"/"Regis" de un movimiento real: "M D" (p. ej. "11 3")
+FECHA_OPER_RE = re.compile(r"^\d{1,2}\s*\d{1,2}$")
+# Texto de pie de página que no es parte de la tabla de movimientos
+PIE_PAGINA_RE = re.compile(r"^(?:Nota:|Comprobante sin valor)", re.IGNORECASE)
 
 
 # ---------------------------------------------------------------------------
@@ -190,6 +194,14 @@ def Scrap_Estado_Banjercito(ruta_archivo: str) -> pd.DataFrame:
                 if "SALDO" in abonos:
                     continue
 
+                # Pie de página (notas, leyendas): la tabla de esta página terminó,
+                # y su texto no debe pegarse al último movimiento.
+                if current_movement and (
+                    PIE_PAGINA_RE.match(_line_text(line_chars))
+                    or (dia_oper and not FECHA_OPER_RE.match(dia_oper))
+                ):
+                    break
+
                 # Ignorar texto fuera de la tabla
                 has_table_data = bool(dia_oper or saldo or cargos or abonos)
                 if not has_table_data and not current_movement:
@@ -216,13 +228,12 @@ def Scrap_Estado_Banjercito(ruta_archivo: str) -> pd.DataFrame:
                         "abonos": abonos,
                         "saldo": saldo,
                     }
-                elif current_movement and concepto:
-                    # Línea de continuación del concepto
-                    current_movement["concepto"] += " " + concepto
-                    if referencia and not current_movement["referencia"]:
-                        current_movement["referencia"] = referencia
-                    if usuario and not current_movement["usuario"]:
-                        current_movement["usuario"] = usuario
+                elif current_movement and (concepto or usuario or referencia):
+                    # Línea de continuación: se conserva todo el texto, aunque
+                    # solo traiga usuario o referencia
+                    for campo, valor in (("concepto", concepto), ("usuario", usuario), ("referencia", referencia)):
+                        if valor:
+                            current_movement[campo] = (current_movement[campo] + " " + valor).strip()
 
             if current_movement:
                 all_movements.append(current_movement)
@@ -245,10 +256,10 @@ def Scrap_Estado_Banjercito(ruta_archivo: str) -> pd.DataFrame:
 
     df["fecha"] = df.apply(_format_fecha, axis=1)
 
-    # Construir descripción limpia
+    # Construir descripción: concepto + usuario + referencia (separados por espacio)
     df["descripcion"] = (
-        df["concepto"]
-        .str.replace(r"\s+", " ", regex=True)
+        (df["concepto"] + " " + df["usuario"] + " " + df["referencia"])
+        .str.replace(r"[\s|]+", " ", regex=True)
         .str.strip()
     )
 

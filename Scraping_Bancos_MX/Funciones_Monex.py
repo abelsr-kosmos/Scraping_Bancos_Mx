@@ -107,8 +107,27 @@ def _es_linea_de_montos(line: str) -> list[str]:
     return montos if len(montos) >= 6 else []
 
 
-# La descripción completa de Monex es muy larga; solo se conservan los primeros caracteres.
-DESCRIPCION_MAX_CHARS = 150
+# Línea que abre un movimiento nuevo (tipo de operación). Se usa para separar
+# el texto que va DESPUÉS de la fila de montos (cola del movimiento anterior)
+# del que va ANTES de la siguiente fila (encabezado del siguiente). "Comisión $"
+# e "Intereses $" son líneas de detalle (cola), no inicios.
+INICIO_MOVIMIENTO_RE = re.compile(
+    r"^(?:Retiro|Dep[oó]sito|Abono|Cargo|Traspaso|Comisi[oó]n|Comision|Pago|Intereses?)\b(?!\s*\$)",
+    re.IGNORECASE,
+)
+FIN_DETALLE_RE = re.compile(r"^Dato no verificado", re.IGNORECASE)
+
+
+def _largo_cola(gap: list[str]) -> int:
+    """Cuántas líneas de `gap` (las que hay entre dos filas de montos)
+    pertenecen al movimiento anterior. El resto es el encabezado del
+    siguiente. Si no hay una señal clara, ninguna (comportamiento previo)."""
+    for i, line in enumerate(gap):
+        if FIN_DETALLE_RE.match(line):
+            return i + 1
+        if INICIO_MOVIMIENTO_RE.match(line):
+            return i
+    return 0
 
 
 @montos_cero
@@ -143,33 +162,42 @@ def Scrap_Estado_Monex(ruta_archivo: str) -> pd.DataFrame:
         lineas = _extraer_lineas_seccion(pdf, encabezado_objetivo)
 
     movimientos = []
-    buffer: list[str] = []
+    idx_montos = [i for i, line in enumerate(lineas) if _es_linea_de_montos(line)]
 
-    for line in lineas:
-        buffer.append(line)
-        montos = _es_linea_de_montos(line)
-        if not montos:
-            continue
+    # Fronteras cabeza/cola: el texto entre dos filas de montos se reparte
+    # entre la cola del movimiento anterior y la cabeza del siguiente.
+    inicio_cabeza = []  # índice donde empieza el texto previo de cada fila
+    fin_cola = []       # índice (excl.) donde termina el texto posterior
+    previo = -1
+    for k, i in enumerate(idx_montos):
+        sig = idx_montos[k + 1] if k + 1 < len(idx_montos) else len(lineas)
+        cola = _largo_cola(lineas[i + 1:sig]) if k + 1 < len(idx_montos) else sig - i - 1
+        fin_cola.append(i + 1 + cola)
+        inicio_cabeza.append(previo + 1 if k == 0 else fin_cola[k - 1])
+        previo = i
 
-        montos6 = montos[-6:]
+    for k, i in enumerate(idx_montos):
+        line = lineas[i]
+        cabeza = lineas[inicio_cabeza[k]:i]
+        cola = lineas[i + 1:fin_cola[k]]
+        montos6 = _es_linea_de_montos(line)[-6:]
         abono = float(montos6[0].replace(",", ""))
         cargo = float(montos6[1].replace(",", ""))
         saldo = float(montos6[-1].replace(",", ""))
 
-        fecha_match = DATE_RE.search(line) or DATE_RE.search("\n".join(buffer))
+        fecha_match = DATE_RE.search(line) or DATE_RE.search("\n".join(cabeza + [line]))
         if not fecha_match:
             # Sin fecha reconocible: no se puede formar un movimiento válido.
-            buffer = []
             continue
 
         dia, mes_abbr = fecha_match.group(1), fecha_match.group(2).upper()
         # Mismo formato que BBVA: dd/MMM/aaaa (p. ej. 01/JUN/2026)
         fecha = f"{dia.zfill(2)}/{mes_abbr}" + (f"/{anio}" if anio else "")
 
-        # Limpia la línea de montos (deja solo el texto que no es fecha/monto)
-        # antes de unir todo el bloque como descripción.
-        buffer[-1] = MONEY_RE.sub("", DATE_RE.sub("", line))
-        descripcion = re.sub(r"\s+", " ", " ".join(buffer)).strip()[:DESCRIPCION_MAX_CHARS].rstrip()
+        # Limpia la línea de montos (deja solo el texto que no es fecha/monto,
+        # quitando solo la primera fecha) y une cabeza + fila + cola.
+        linea_limpia = MONEY_RE.sub("", DATE_RE.sub("", line, count=1))
+        descripcion = re.sub(r"[\s|]+", " ", " ".join(cabeza + [linea_limpia] + cola)).strip()
 
         movimientos.append({
             "fecha": fecha,
@@ -178,6 +206,5 @@ def Scrap_Estado_Monex(ruta_archivo: str) -> pd.DataFrame:
             "retiro": cargo if cargo > 0 else None,
             "saldo": saldo,
         })
-        buffer = []
 
     return pd.DataFrame(movimientos, columns=["fecha", "descripcion", "deposito", "retiro", "saldo"])

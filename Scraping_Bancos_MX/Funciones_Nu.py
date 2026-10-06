@@ -55,6 +55,7 @@ class NuTableExtractor:
 
         movimientos: List[Movement] = []
         in_table = False
+        primera_hoja = True
 
         for page_idx, page_text in enumerate(pages_text):
             if not page_text:
@@ -81,6 +82,17 @@ class NuTableExtractor:
 
             indexes = [m.start() for m in date_matches]
 
+            # Texto antes de la primera fecha de una hoja que no es la primera de la
+            # tabla: continuación del último movimiento de la hoja anterior.
+            if not primera_hoja and movimientos:
+                previo = page_text[:indexes[0]] if indexes else page_text
+                previo = previo.split("Nu México Financiera")[0].split("Con estos movimientos")[0]
+                previo = self.money_pattern.sub("", previo)
+                previo = " ".join(previo.replace("|", " ").split())
+                if previo:
+                    movimientos[-1].descripcion = f"{movimientos[-1].descripcion} {previo}".strip()
+            primera_hoja = False
+
             for i in range(len(indexes)):
                 start_idx = indexes[i]
                 end_idx = indexes[i + 1] if i + 1 < len(indexes) else len(page_text)
@@ -98,9 +110,11 @@ class NuTableExtractor:
                 money_blocks = self.money_pattern.findall(movimiento_text)
                 monto_raw = money_blocks[0] if money_blocks else None
 
-                # Limpieza: quitar monto y fecha del texto completo
-                movimiento_text_clean = self.money_pattern.sub("", movimiento_text).strip()
-                movimiento_text_clean = self.date_pattern.sub("", movimiento_text_clean).strip()
+                # Limpieza: quitar solo el primer monto (el real) y la primera fecha;
+                # otros montos o fechas del texto son parte de la descripción
+                movimiento_text_clean = self.money_pattern.sub("", movimiento_text, count=1)
+                movimiento_text_clean = self.date_pattern.sub("", movimiento_text_clean, count=1)
+                movimiento_text_clean = " ".join(movimiento_text_clean.replace("|", " ").split())
 
                 movimientos.append(
                     Movement(

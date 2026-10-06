@@ -13,7 +13,9 @@ MESES = {
 # cuenta: "Día ..." (solo día del mes) o "Fecha ..." (fecha completa dd/mm/aaaa).
 HEADER_RE = re.compile(r"(?:D[ií]a|Fecha)\s+Referencia\s+Descripci[oó]n\s+Retiros\s+Dep[oó]sitos\s+Saldo", re.IGNORECASE)
 PERIODO_RE = re.compile(r"Periodo\s+Del:?\s*(\d{1,2})-(\w{3})-(\d{4})\s*Al\s*(\d{1,2})-(\w{3})-(\d{4})", re.IGNORECASE)
-FOOTER_RE = re.compile(r"Banco Multiva", re.IGNORECASE)
+# El pie de página empieza la línea con la razón social completa; anclarlo evita
+# cortar la página cuando una descripción solo menciona "Banco Multiva".
+FOOTER_RE = re.compile(r"^\s*Banco Multiva,?\s+S\.?\s?A\.?", re.IGNORECASE)
 FIN_TABLA_RE = re.compile(r"CARGOS OBJETADOS POR EL CLIENTE", re.IGNORECASE)
 
 # Una línea de movimiento termina siempre en tres montos: retiro, depósito y
@@ -63,20 +65,26 @@ def _parse_monto_movimiento(texto: str):
     return valor if valor != 0 else None
 
 
-def _procesar_pagina(lineas, anio_actual, mes_actual, dia_anterior):
+def _procesar_pagina(lineas, anio_actual, mes_actual, dia_anterior, movimiento_previo=None):
     """Extrae los movimientos de una página ya delimitada (sin encabezado/pie).
+
+    movimiento_previo es el último movimiento de la página anterior: las líneas
+    de continuación al inicio de esta página se le agregan (ya está en la lista
+    global, se modifica en el lugar).
 
     Regresa (movimientos, anio_actual, mes_actual, dia_anterior) para poder
     seguir el conteo de mes/año a través de varias páginas.
     """
     movimientos = []
-    movimiento_actual = None
+    movimiento_actual = movimiento_previo
+    previo_pendiente = movimiento_previo is not None
 
     for linea in lineas:
         match = MOVIMIENTO_RE.match(linea.strip())
         if match:
-            if movimiento_actual is not None:
+            if movimiento_actual is not None and not previo_pendiente:
                 movimientos.append(movimiento_actual)
+            previo_pendiente = False
 
             fecha_cruda = match.group("fecha")
             if "/" in fecha_cruda:
@@ -95,7 +103,7 @@ def _procesar_pagina(lineas, anio_actual, mes_actual, dia_anterior):
 
             movimiento_actual = {
                 "fecha": fecha,
-                "descripcion": match.group("descripcion").strip(),
+                "descripcion": f'{match.group("referencia")} {match.group("descripcion")}'.strip(),
                 "deposito": _parse_monto_movimiento(match.group("deposito")),
                 "retiro": _parse_monto_movimiento(match.group("retiro")),
                 "saldo": _limpiar_saldo(match.group("saldo")),
@@ -105,7 +113,7 @@ def _procesar_pagina(lineas, anio_actual, mes_actual, dia_anterior):
             if linea_limpia and movimiento_actual is not None:
                 movimiento_actual["descripcion"] += " " + linea_limpia
 
-    if movimiento_actual is not None:
+    if movimiento_actual is not None and not previo_pendiente:
         movimientos.append(movimiento_actual)
 
     return movimientos, anio_actual, mes_actual, dia_anterior
@@ -136,6 +144,7 @@ def Scrap_Estado_Multiva(ruta_archivo: str) -> pd.DataFrame:
         textos_paginas = [pagina.extract_text() or "" for pagina in pdf.pages]
         anio_actual, mes_actual = _extraer_periodo_inicio(textos_paginas)
         dia_anterior = None
+        ultimo_movimiento = None
 
         for texto in textos_paginas:
             lineas = texto.split("\n")
@@ -154,12 +163,17 @@ def Scrap_Estado_Multiva(ruta_archivo: str) -> pd.DataFrame:
                 continue
 
             movimientos, anio_actual, mes_actual, dia_anterior = _procesar_pagina(
-                lineas[header_idx + 1:fin_idx], anio_actual, mes_actual, dia_anterior
+                lineas[header_idx + 1:fin_idx], anio_actual, mes_actual, dia_anterior,
+                ultimo_movimiento,
             )
             todos_los_movimientos.extend(movimientos)
+            if movimientos:
+                ultimo_movimiento = movimientos[-1]
 
     if not todos_los_movimientos:
         return pd.DataFrame(columns=["fecha", "descripcion", "deposito", "retiro", "saldo"])
 
     df = pd.DataFrame(todos_los_movimientos)
+    # Espacios repetidos y '|' sueltos fuera de la descripción
+    df["descripcion"] = df["descripcion"].str.replace("|", " ", regex=False).str.split().str.join(" ")
     return df[["fecha", "descripcion", "deposito", "retiro", "saldo"]]

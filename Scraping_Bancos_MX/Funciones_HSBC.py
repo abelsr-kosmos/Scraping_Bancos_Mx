@@ -27,6 +27,9 @@ class ParserHSBC:
     STOP: Pattern = re.compile(r'^(Emitido por:|CoDi)', flags=re.IGNORECASE)
     ROW_START: Pattern = re.compile(r'^(0[1-9]|[12]\d|3[01])\s+(\S.*)$')
     MONEY: Pattern = re.compile(r'\$\s*(\d[\d,\s]*(?:\.\s*\d[\d\s]*)?)')
+    RUIDO: Pattern = re.compile(
+        r'^(P[aá]gina|Hoja|\d+\s*(/|de)\s*\d+$|Fecha\b|Descripci[oó]n|Detalles?\b|Retiro|Deposito|Saldo\b|Cuenta\b|Periodo|'
+        r'Estado\s+de\s+cuenta|HSBC|Sucursal|Cliente|R\.?F\.?C)', flags=re.IGNORECASE)
     SALDO_INICIAL: Pattern = re.compile(
         r'Saldo\s+Inicial(?:\s+del)?\s+(?:Periodo\s+)?\$\s*([\d,]+\.\d{2})', flags=re.IGNORECASE)
     PERIODO: Pattern = re.compile(
@@ -101,8 +104,10 @@ class ParserHSBC:
         return dia
 
     # ----------------------------------------------------------------- filas
-    def _filas(self) -> List[Tuple[str, str, List[str]]]:
-        """Regresa (día, descripción, [textos de monto $]) por movimiento, solo dentro de la tabla."""
+    def _filas(self) -> List[Tuple[str, str, List[str], str]]:
+        """Regresa (día, descripción, [textos de monto $], descripción completa) por movimiento,
+        solo dentro de la tabla. La descripción corta (hasta la línea de montos) solo sirve para
+        deducir cargo/abono; la completa trae todo el texto del movimiento."""
         filas = []
         activo = False
         prev_header = []
@@ -126,20 +131,32 @@ class ParserHSBC:
                 continue
             m = self.ROW_START.match(ln)
             if m:
-                cur = [m.group(1), [], []]
+                cur = [m.group(1), [], [], []]
                 filas.append(cur)
                 ln = m.group(2)
             if cur is None:
                 continue
+            # Encabezados/pies de hoja que se repiten después de los montos no son descripción
+            ruido = bool(not m and cur[2] and self.RUIDO.match(ln))
             montos = self.MONEY.findall(ln)
             if montos:
+                # Todo el texto de la línea fuera de los montos "$" (antes, entre y después)
+                texto = re.sub(r'[\s|]+', ' ', self.MONEY.sub(' ', ln).replace('$', ' ')).strip()
+                if texto and not ruido:
+                    cur[3].append(texto)
+                # Texto usado solo para deducir cargo/abono (igual que antes: lo previo al primer "$")
                 texto_previo = ln[:ln.index('$')].strip()
                 if texto_previo and not cur[2]:
                     cur[1].append(texto_previo)
                 cur[2].extend(montos)
-            elif not cur[2]:
-                cur[1].append(ln)
-        return [(d, ' '.join(desc), montos) for d, desc, montos in filas if montos]
+            else:
+                # También las líneas posteriores a la de los montos, hasta el siguiente movimiento
+                texto = re.sub(r'[\s|]+', ' ', ln.replace('|', ' ')).strip()
+                if texto and not ruido:
+                    cur[3].append(texto)
+                if not cur[2]:
+                    cur[1].append(ln)
+        return [(d, ' '.join(desc), montos, ' '.join(completa)) for d, desc, montos, completa in filas if montos]
 
     def _clasificar(self, desc: str) -> Optional[int]:
         """+1 si por texto parece abono, -1 si cargo, None si no se sabe."""
@@ -154,7 +171,7 @@ class ParserHSBC:
         prev = self._saldo_inicial()
         periodo = self._periodo()
         rows = []
-        for dia, desc, montos in self._filas():
+        for dia, desc, montos, completa in self._filas():
             hint = self._clasificar(desc)
             cand_a = self._candidatos(montos[0])
             cand_s = self._candidatos(montos[-1]) if len(montos) > 1 else []
@@ -182,7 +199,7 @@ class ParserHSBC:
 
             prev = saldo
             rows.append(MovimientoHSBC(
-                self._fecha_completa(dia, periodo), desc,
+                self._fecha_completa(dia, periodo), completa,
                 monto if signo < 0 else 0.0,
                 monto if signo > 0 else 0.0,
                 saldo))

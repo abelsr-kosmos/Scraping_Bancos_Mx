@@ -9,7 +9,16 @@ def Scrap_Estado_Santander(ruta_archivo):
     estado = pdfplumber.open(ruta_archivo)
     tabla = analizar_estados(estado)
     tabla2 = analisis_movimientos(tabla)
+    tabla2["descripcion"] = tabla2["descripcion"].map(limpiar_descripcion)
     return tabla2
+
+def limpiar_descripcion(texto):
+    """Descripción final en una sola línea: las líneas del movimiento vienen
+    unidas con '|' y el folio pegado a la descripción ('|0000000COMISION...');
+    se separa el folio con un espacio, '|' pasa a espacio y se colapsan
+    espacios repetidos."""
+    texto = re.sub(r"^[\s|]*(\d{7})(?=[^\d\s|])", r"\1 ", str(texto))
+    return " ".join(texto.replace("|", " ").split())
 
 def analisis_movimientos(df):
     df = df.copy()
@@ -183,9 +192,10 @@ def eliminar_movimientos_no_deseados(filas):
                 # fila para no arrastrar el pie de página / firma digital del
                 # CFDI hacia la descripción del último movimiento real.
                 filas = filas[filas["Top"] < row["Top"]]
-            elif len(row["Concepto"]) > 150:
+            elif len(row["Concepto"]) > 150 and row["Concepto"].count(" ") < 5:
                 # Bloque de sello/cadena digital del CFDI: una sola cadena
-                # larga sin espacios que no es texto de ningún movimiento.
+                # larga sin espacios que no es texto de ningún movimiento (una
+                # descripción larga pero con palabras sí se conserva).
                 filas = filas[filas["Top"] < row["Top"]]
 
     for index,row in filas.iterrows():
@@ -252,6 +262,14 @@ SALDO_ANTERIOR_PATTERN = re.compile(
     flags=re.IGNORECASE,
 )
 ABONO_PATTERN = re.compile(r"\b(ABONO|DEPOSITO|DEPOSITOI|CASHBACK)", flags=re.IGNORECASE)
+# Líneas que ya no son detalle del movimiento (pie de página, encabezado de la
+# siguiente hoja, totales, sello digital): al encontrar una se corta el detalle.
+FIN_DETALLE_PATTERN = re.compile(
+    r"BANCO\s*SANTANDER|SALDO\s*FINAL|^\W*TOTAL\b|FECHA\W+FOLIO|ESTADO\s*DE\s*CUENTA|"
+    r"CADENA\s*ORIGINAL|SELLO|FOLIO\s*FISCAL|CFDI|COMUNIQUE|P[AÁ]GINA|HOJA\s*\d|"
+    r"CARGOS\s*OBJETADOS|\bRFC\s*:?\s*BSM",
+    flags=re.IGNORECASE,
+)
 
 @dataclass
 class Transaccion:
@@ -260,6 +278,7 @@ class Transaccion:
     descripcion: str
     monto: float
     saldo: Optional[float]
+    detalle: str = ""
 
 class ParserTransacciones:
     """
@@ -322,6 +341,7 @@ class ParserTransacciones:
         lineas = encabezado.splitlines()
         primera = lineas[0][coincidencia.end():]
         montos = MONEY_PATTERN.findall(primera)
+        inicio_detalle = 1
         for linea in lineas[1:]:
             if len(montos) >= 2:
                 break
@@ -329,6 +349,7 @@ class ParserTransacciones:
             if not m:
                 break
             montos.append(m.group('monto'))
+            inicio_detalle += 1
         if not montos:
             logger.warning("Grupo sin montos omitido")
             return None
@@ -340,8 +361,22 @@ class ParserTransacciones:
         # Descripción: texto entre folio y primer monto de la primera línea
         descripcion = primera.split(monto_str)[0]
         descripcion = descripcion.strip(' |/}{!').replace('\n', ' ').strip()
-        # Detalle de las líneas siguientes (hasta el pie de página)
-        return Transaccion(fecha=fecha, folio=folio, descripcion=descripcion, monto=monto, saldo=saldo)
+        # Detalle de las líneas siguientes (cuenta, rastreo, concepto de pago...)
+        # hasta el pie de página o la siguiente hoja; se omiten las líneas que
+        # son solo un monto y las cadenas largas sin espacios (sello digital).
+        detalle = []
+        for linea in lineas[inicio_detalle:]:
+            if FIN_DETALLE_PATTERN.search(linea):
+                break
+            if MONEY_LINE_PATTERN.match(linea):
+                continue
+            linea = linea.replace('|', ' ').strip(' /}{!')
+            if len(linea) > 100 and ' ' not in linea:
+                break
+            if linea:
+                detalle.append(linea)
+        return Transaccion(fecha=fecha, folio=folio, descripcion=descripcion, monto=monto, saldo=saldo,
+                           detalle=' '.join(detalle))
 
     def to_dataframe(self) -> pd.DataFrame:
         """Devuelve un DataFrame con todas las transacciones parseadas."""
@@ -374,7 +409,7 @@ class ParserTransacciones:
                     saldo = round((prev or 0.0) + signo * t.monto, 2)
             registros.append({
                 'fecha': t.fecha,
-                'descripcion': f"{t.folio} {t.descripcion}",
+                'descripcion': " ".join(f"{t.folio} {t.descripcion} {t.detalle}".replace('|', ' ').split()),
                 'deposito': t.monto if signo > 0 else 0.0,
                 'retiro': t.monto if signo < 0 else 0.0,
                 'saldo': saldo,

@@ -69,6 +69,9 @@ def identificar_campos(coordenada):
             return "Cargos"
         elif(coordenada) <= 466 and coordenada >= 420:
             return "Abono"
+        elif(coordenada) <= 535 and coordenada > 466:
+            # Saldo de operación (el de liquidación, más a la derecha, se ignora)
+            return "Saldo"
         else:
             return "-"
 
@@ -93,8 +96,9 @@ def scrap_fila(fila):
     descripcion = grouped.get("Descripcion", "")
     cargo = grouped.get("Cargos", "")
     abono = grouped.get("Abono", "")
+    saldo = grouped.get("Saldo", "")
     
-    return {"Operacion": oper, "Fecha": fecha, "Descripcion": descripcion, "Cargo": cargo, "Abono": abono}
+    return {"Operacion": oper, "Fecha": fecha, "Descripcion": descripcion, "Cargo": cargo, "Abono": abono, "Saldo": saldo}
 
 def scrap_filas(df):
     # Ensure "linea" is integer for proper grouping
@@ -222,7 +226,7 @@ def inicializar_movimientos(df_movimientos):
         operacion = df_movimientos.iloc[i,0]
         if re.search(r"\d{1,2}\/\w{3}",operacion):
             numero_movimiento += 1
-        df_movimientos.iloc[i,5] = numero_movimiento
+        df_movimientos.iloc[i,df_movimientos.columns.get_loc("Movimiento")] = numero_movimiento
     return df_movimientos
 
 def unificar_movimientos(df):
@@ -245,7 +249,9 @@ def unificar_movimientos(df):
 
     # Todas las líneas de continuación ya van en "Descripcion"
     referencia = ""
-    moviemiento = {"Operacion":df.iloc[0,0],"Fecha":df.iloc[0,1],"Descripcion":descripcion,"Referencia":referencia, "Cargo":df.iloc[0,3],"Abono":df.iloc[0,4],"Movimiento":df.iloc[0,5]}
+    moviemiento = {"Operacion":df.iloc[0,0],"Fecha":df.iloc[0,1],"Descripcion":descripcion,"Referencia":referencia, "Cargo":df.iloc[0,3],"Abono":df.iloc[0,4],
+                   # El saldo se imprime solo en algunas líneas del movimiento (a veces no en la primera)
+                   "Saldo":next((s for s in df["Saldo"] if str(s).strip()), ""),"Movimiento":df["Movimiento"].iloc[0]}
     return moviemiento
 
 def extraer_fecha_primera_pagina(pagina):
@@ -336,7 +342,6 @@ def analisis_movimientos(df):
 def normalizar_tabla(df):
     df = df.drop('Movimiento', axis=1)
     df = df.drop('Fecha', axis=1)
-    df["Saldo"] = ""
     df = df.rename(columns={"Operacion": "Fecha", "Descripcion": "Concepto", "Referencia": "Origen", "Cargo": "Retiro", "Abono": "Deposito"})
     df = df[['Fecha', 'Concepto', 'Origen', 'Deposito', 'Retiro','Saldo','TipoMovimiento','Contraparte','InstitucionContraparte','ConceptoMovimiento']]
     return df

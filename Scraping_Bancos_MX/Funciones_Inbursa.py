@@ -265,15 +265,16 @@ class InbursaExtractor:
     header_regex: str = r"\bFECHA REFERENCIA CONCEPTO CARGOS ABONOS SALDO\b"
 
     # FECHA DE CORTE 30 Abr 2022  (solo aparece en la primera página)
-    corte_date_regex: str = r"FECHA DE CORTE\s+(\d{1,2}\s+\w{3}\s+\d{4})"
+    corte_date_regex: str = r"FECHA DE CORTE\s+(\d{1,2}\s+\w{3}\.?\s+\d{4})"
 
     # Movimiento: "ABR 28  12345  CONCEPTO ...  1,234.00  9,999.99"
+    # (algunos estados imprimen el mes con punto, "JUN. 09", y saldos negativos, "-8.55")
     movement_pattern: str = (
-        r"(?P<date>[A-Z]{3}\s+\d{1,2})\s+"
+        r"(?P<date>[A-Z]{3}\.?\s+\d{1,2})\s+"
         r"(?:(?P<ref>\d+)\s+)?"
         r"(?P<concept>.+?)\s+"
         r"(?:(?P<amount>[\d,]+\.\d{2})\s+)?"
-        r"(?P<balance>[\d,]+\.\d{2})"
+        r"(?P<balance>-?[\d,]+\.\d{2})"
     )
 
     def extract(self, pdf_path: str) -> pd.DataFrame:
@@ -397,7 +398,7 @@ class InbursaExtractor:
         if len(parts) != 2:
             return f"{date_raw} {year}".strip()
 
-        mon, day = parts[0], parts[1]
+        mon, day = parts[0].rstrip("."), parts[1]
         return f"{day} {mon} {year}"
 
     def _build_description(self, ref: str, concept: str, between_text: str) -> str:

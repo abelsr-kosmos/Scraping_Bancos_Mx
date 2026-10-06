@@ -211,10 +211,11 @@ def unificar_columna(top):
             fecha = fecha + row["Caracter"]
         elif row["Columna"] == 1:
             concepto = concepto + row["Caracter"]
+        # El estado imprime CARGOS (x1 <= 420) antes que ABONOS: cargo = retiro, abono = depósito
         elif row["Columna"] == 2:
-            deposito = deposito + row["Caracter"]
-        elif row["Columna"] == 3:
             retiro = retiro + row["Caracter"]
+        elif row["Columna"] == 3:
+            deposito = deposito + row["Caracter"]
         elif row["Columna"] == 4:
             saldo = saldo + row["Caracter"]
     fila = {"Fecha": fecha, "Concepto": concepto, "Origen": "", "Deposito": deposito, "Retiro": retiro, "Saldo": saldo, "Top": top["Top"].max()}

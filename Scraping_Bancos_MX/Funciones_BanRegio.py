@@ -301,10 +301,11 @@ def unificar_columna(top):
             fecha = fecha + row["Caracter"]
         elif row["Columna"] == 1:
             concepto = concepto + row["Caracter"]
+        # El estado imprime CARGOS (x1 <= 420) antes que ABONOS: cargo = retiro, abono = depósito
         elif row["Columna"] == 2:
-            deposito = deposito + row["Caracter"]
-        elif row["Columna"] == 3:
             retiro = retiro + row["Caracter"]
+        elif row["Columna"] == 3:
+            deposito = deposito + row["Caracter"]
         elif row["Columna"] == 4:
             saldo = saldo + row["Caracter"]
     fila = {"Fecha": fecha, "Concepto": concepto, "Origen": "", "Deposito": deposito, "Retiro": retiro, "Saldo": saldo, "Top": top["Top"].max()}
@@ -322,8 +323,9 @@ def unificar_columnas(columnas):
             "Fecha": pivot.get(0, ""),
             "Concepto": pivot.get(1, ""),
             "Origen": "",
-            "Deposito": pivot.get(2, ""),
-            "Retiro": pivot.get(3, ""),
+            # CARGOS (col 2) = retiro, ABONOS (col 3) = depósito
+            "Deposito": pivot.get(3, ""),
+            "Retiro": pivot.get(2, ""),
             "Saldo": pivot.get(4, ""),
             "Top": pivot.index,
         }

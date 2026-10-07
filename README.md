@@ -67,7 +67,7 @@ print(df.head())
 | BanCoppel | `BancoppelMovimientosExtractor` (class) |
 | Banjercito | `Scrap_Estado_Banjercito` |
 | Banorte | `Scrap_Estado_Banorte` |
-| BanRegio | `Scrap_Estado_BanRegio` |
+| BanRegio | `Scrap_Estado_BanRegio` (créditos opcionales: `Scrap_Creditos_BanRegio`, ver `docs/banregio_creditos.md`) |
 | Base (Banco BASE) | `Scrap_Estado_Base` |
 | BBVA | `Scrap_Estado_BBVA` |
 | HeyBanco | `Scrap_Estado_HeyBanco` |

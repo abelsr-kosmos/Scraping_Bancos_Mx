@@ -18,12 +18,114 @@ RE_NOSPACE = re.compile(r"\s+")
 TABLE_SENTINEL = "DIACONCEPTOCARGOSABONOSSALDO"
 
 @montos_cero
-def Scrap_Estado_BanRegio(ruta_archivo):
+def Scrap_Estado_BanRegio(ruta_archivo, incluir_creditos=False):
+    """Movimientos de las cuentas del estado de cuenta Banregio.
+
+    incluir_creditos=True agrega ademas el detalle de movimientos de los
+    creditos (ver Scrap_Creditos_BanRegio y docs/banregio_creditos.md). Por
+    defecto esta apagado: son abonos al credito, no flujo de la cuenta."""
     with pdfplumber.open(ruta_archivo) as estado:
         tabla = analizar_estados(estado)
+        creditos = extraer_creditos(estado) if incluir_creditos else None
     tabla = analisis_movimientos(tabla)
     tabla = formatear_tabla(tabla)
+    if creditos is not None and not creditos.empty:
+        tabla = pd.concat([tabla, creditos], ignore_index=True)
     return tabla
+
+
+@montos_cero
+def Scrap_Creditos_BanRegio(ruta_archivo):
+    """Detalle de movimientos de los creditos (MiCredito Fijo, AutoRegio,
+    Hipotecario...) de un estado de cuenta Banregio, con el esquema estandar
+    (fecha, descripcion, deposito, retiro, saldo). 'deposito' = ABONO al
+    credito, 'retiro' = CARGO. OJO: no es flujo de la cuenta; ver
+    docs/banregio_creditos.md antes de sumarlo con los movimientos de cuenta."""
+    with pdfplumber.open(ruta_archivo) as estado:
+        return extraer_creditos(estado)
+
+
+RE_MONTO = re.compile(r"^\(?-?[\d,]+\.\d{2}\)?$")
+RE_PERIODO = re.compile(r"del\s+\d{1,2}\s+al\s+\d{1,2}\s+de\s+([A-Za-z]+)\s+(\d{4})", re.IGNORECASE)
+RE_FECHA_AMORTI = re.compile(r"^(\d{1,2})-([a-z]{3})-(\d{2,4})$", re.IGNORECASE)
+_MESES = {"ENERO": "ENE", "FEBRERO": "FEB", "MARZO": "MAR", "ABRIL": "ABR", "MAYO": "MAY", "JUNIO": "JUN",
+          "JULIO": "JUL", "AGOSTO": "AGO", "SEPTIEMBRE": "SEP", "OCTUBRE": "OCT", "NOVIEMBRE": "NOV", "DICIEMBRE": "DIC"}
+_MES_CORTO = {"ENE": "ENE", "FEB": "FEB", "MAR": "MAR", "ABR": "ABR", "MAY": "MAY", "JUN": "JUN",
+              "JUL": "JUL", "AGO": "AGO", "SEP": "SEP", "OCT": "OCT", "NOV": "NOV", "DIC": "DIC"}
+
+
+def extraer_creditos(estado):
+    """Filas de las tablas de credito. Soporta los dos formatos del estado:
+    'Detalle de Movimientos' (DIA CONCEPTO CARGOS ABONOS, p. ej. MiCredito
+    Fijo) y 'DETALLE DE LOS ULTIMOS MOVIMIENTOS' (FECHA AMORTI. REFERENCIA
+    CONCEPTO CARGO ABONO, p. ej. AutoRegio/Hipotecario). La tabla
+    'REGIOCUENTA REGIOCREDITO' repite los movimientos de la cuenta y no se lee."""
+    filas = []
+    for pagina in estado.pages:
+        lineas = {}
+        palabras_pagina = pagina.extract_words()
+        if not palabras_pagina:
+            continue
+        tops = _agrupar_tops(pd.Series([w["top"] for w in palabras_pagina]))
+        for w, top in zip(palabras_pagina, tops):
+            lineas.setdefault(top, []).append(w)
+        tops = sorted(lineas)
+        textos = {t: " ".join(w["text"] for w in sorted(lineas[t], key=lambda w: w["x0"])) for t in tops}
+        periodo = RE_PERIODO.search(" ".join(textos.values()))
+        mes_anio = (_MESES.get(periodo.group(1).upper()), periodo.group(2)) if periodo else (None, None)
+
+        formato = None
+        x_cargo = x_abono = None
+        for t in tops:
+            texto = textos[t]
+            ws = sorted(lineas[t], key=lambda w: w["x0"])
+            if re.match(r"^DIA CONCEPTO CARGOS ABONOS$", texto):
+                formato, x_cargo, x_abono = "dia", *_x_cargo_abono(ws)
+                continue
+            if re.match(r"^FECHA AMORTI\. REFERENCIA CONCEPTO CARGO ABONO$", texto):
+                formato, x_cargo, x_abono = "amorti", *_x_cargo_abono(ws)
+                continue
+            if formato is None:
+                continue
+            if texto.startswith("Total") or texto.startswith("*"):
+                formato = None
+                continue
+            montos = [w for w in ws if RE_MONTO.match(w["text"])]
+            if len(montos) != 1:
+                continue
+            monto = montos[0]
+            palabras = [w["text"] for w in ws if w is not monto]
+            if formato == "dia":
+                if not (len(palabras) > 1 and re.match(r"^\d{1,2}$", palabras[0])) or mes_anio[0] is None:
+                    continue
+                fecha = f"{int(palabras[0]):02d}/{mes_anio[0]}/{mes_anio[1]}"
+                descripcion = " ".join(palabras[1:])
+            else:
+                m = RE_FECHA_AMORTI.match(palabras[0]) if palabras else None
+                if not m or m.group(2).upper() not in _MES_CORTO:
+                    continue
+                anio = m.group(3) if len(m.group(3)) == 4 else "20" + m.group(3)
+                fecha = f"{int(m.group(1)):02d}/{m.group(2).upper()}/{anio}"
+                descripcion = " ".join(palabras[1:])
+            valor = float(monto["text"].strip("()").replace(",", ""))
+            centro = (monto["x0"] + monto["x1"]) / 2
+            es_abono = abs(centro - x_abono) < abs(centro - x_cargo)
+            filas.append({"fecha": fecha, "descripcion": descripcion,
+                          "deposito": valor if es_abono else None,
+                          "retiro": None if es_abono else valor,
+                          "saldo": None})
+    return pd.DataFrame(filas, columns=["fecha", "descripcion", "deposito", "retiro", "saldo"])
+
+
+def _x_cargo_abono(palabras):
+    """Centros x de los encabezados CARGO(S) y ABONO(S) de la tabla."""
+    centros = {}
+    for w in palabras:
+        if w["text"].upper().startswith("CARGO"):
+            centros["cargo"] = (w["x0"] + w["x1"]) / 2
+        elif w["text"].upper().startswith("ABONO"):
+            centros["abono"] = (w["x0"] + w["x1"]) / 2
+    return centros["cargo"], centros["abono"]
     
 
 def formatear_tabla(df):
@@ -150,22 +252,24 @@ def analizar_estados(estado):
             continue
 
         texto = normalizar_texto_chars(caracteres)
+        texto_fallback = None
 
+        if TABLE_SENTINEL in texto:
+            tiene_encabezado = True
+        else:
+            texto_fallback = RE_NOSPACE.sub("", pagina.extract_text_simple() or "")
+            tiene_encabezado = TABLE_SENTINEL in texto_fallback
+            if tiene_encabezado:
+                texto = texto_fallback
+
+        # Ultima hoja de cada producto: trae el encabezado de la tabla pero solo
+        # el grafico/resumen, sin movimientos. No cierra la tabla: pueden seguir
+        # las hojas de otro producto del mismo estado (otra cuenta, otro credito).
         contiene_tabla = (
-            TABLE_SENTINEL in texto
+            tiene_encabezado
             and "GráficoTransaccional" not in texto
             and "REGIOCUENTA" not in texto
         )
-
-        if not contiene_tabla:
-            texto_fallback = RE_NOSPACE.sub("", pagina.extract_text_simple() or "")
-            contiene_tabla = (
-                TABLE_SENTINEL in texto_fallback
-                and "GráficoTransaccional" not in texto_fallback
-                and "REGIOCUENTA" not in texto_fallback
-            )
-            if contiene_tabla:
-                texto = texto_fallback
 
         if contiene_tabla:
             en_tabla = True
@@ -173,7 +277,7 @@ def analizar_estados(estado):
             movimientos_paginas.append(movimientos)
             continue
 
-        if en_tabla:
+        if en_tabla and not tiene_encabezado:
             break
 
     if movimientos_paginas:
@@ -268,12 +372,28 @@ def incluir_anio_mes(filas,texto):
 
 
 
+# Los caracteres de una misma linea visual pueden venir con 'top' distintos por
+# ~1 pt (p. ej. 231.07 / 231.17 / 232.07); las lineas reales distan ~10 pt o mas.
+TOLERANCIA_TOP = 2.0
+
+
+def _agrupar_tops(tops):
+    """Une los 'top' consecutivos que distan <= TOLERANCIA_TOP en un mismo valor
+    (el menor del grupo), para que cada linea visual quede en una sola fila."""
+    unicos = np.sort(tops.round(4).unique())
+    if len(unicos) == 0:
+        return tops
+    grupo = np.concatenate([[0], np.cumsum(np.diff(unicos) > TOLERANCIA_TOP)])
+    inicio_grupo = pd.Series(unicos).groupby(grupo).transform("min").to_numpy()
+    return tops.round(4).map(dict(zip(unicos, inicio_grupo)))
+
+
 def agrupar_columnas(caracteres):
     if not caracteres:
         return pd.DataFrame(columns=["Caracter", "Top", "X", "Columna"])
 
     columnas = pd.DataFrame(caracteres)[["text", "top", "x1"]].rename(columns={"text": "Caracter", "top": "Top", "x1": "X"})
-    columnas["Top"] = columnas["Top"].round(4)
+    columnas["Top"] = _agrupar_tops(columnas["Top"])
 
     x = columnas["X"]
     columnas["Columna"] = np.select(

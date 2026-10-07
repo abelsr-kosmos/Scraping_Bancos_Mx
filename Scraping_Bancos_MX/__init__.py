@@ -61,6 +61,7 @@ __all__ = [
     "Scrap_Estado_BBVA",
     "Scrap_Estado_Banorte",
     "Scrap_Estado_BanRegio",
+    "Scrap_Creditos_BanRegio",
     "Scrap_Estado_BanBajio",
     "Scrap_Estado_Inbursa",
     "Scrap_Estado_Santander",

@@ -17,21 +17,27 @@ def Scrap_Estado_Banorte(ruta_archivo):
         for concepto, origen, concepto_mov in zip(tabla2['concepto'], tabla2['origen'], tabla2['conceptomovimiento'])
     ]
     tabla2 = tabla2[['fecha', 'descripcion', 'deposito', 'retiro', 'saldo']]
-    try:
-        tabla2['deposito'] = pd.to_numeric(tabla2['deposito'].str.replace(r'[^0-9.,]', '', regex=True).str.replace(',', ''), errors='coerce')
-    except Exception as e:
-        print(f"Error al convertir depósito: {e}")
-    try:
-        tabla2['retiro'] = pd.to_numeric(tabla2['retiro'].str.replace(r'[^0-9.,]', '', regex=True).str.replace(',', ''), errors='coerce')
-    except Exception as e:
-        print(f"Error al convertir retiro: {e}")
-    try:
-        tabla2['saldo'] = pd.to_numeric(tabla2['saldo'].str.replace(r'[^0-9.,]', '', regex=True).str.replace(',', ''), errors='coerce')
-    except Exception as e:
-        print(f"Error al convertir saldo: {e}")
+    for col in ('deposito', 'retiro', 'saldo'):
+        try:
+            tabla2[col] = tabla2[col].apply(_importe_con_signo)
+        except Exception as e:
+            print(f"Error al convertir {col}: {e}")
     return tabla2
 
             
+
+
+def _importe_con_signo(texto):
+    """Convierte un importe del estado ('1,234.56', '156.12-') a float.
+    Banorte marca los importes negativos con un '-' al final (o al inicio)."""
+    texto = str(texto)
+    negativo = '-' in texto
+    limpio = re.sub(r'[^0-9.]', '', texto)
+    try:
+        valor = float(limpio)
+    except ValueError:
+        return float('nan')
+    return -valor if negativo else valor
 
 
 def construir_descripcion(concepto, origen, concepto_mov):

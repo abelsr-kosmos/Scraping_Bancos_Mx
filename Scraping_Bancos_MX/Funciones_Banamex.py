@@ -145,6 +145,21 @@ def parse_monetario(txt):
     txt = txt.replace(",", "")
     return sign * float(txt)
 
+# x1 (borde derecho) de los montos de cada columna en los estados Banamex:
+# RETIROS ~315-320, DEPOSITOS ~395, SALDO ~470-475.
+_X1_MAX_RETIRO = 355
+_X1_MAX_DEPOSITO = 435
+
+
+def _lado_por_columna(x1):
+    """'retiro' / 'deposito' segun la columna donde termina el monto, o None."""
+    if x1 <= _X1_MAX_RETIRO:
+        return "retiro"
+    if x1 <= _X1_MAX_DEPOSITO:
+        return "deposito"
+    return None
+
+
 def dist(a, b):
     """Distancia absoluta entre dos valores."""
     return abs(a - b)
@@ -322,8 +337,9 @@ def procesar_pdf(pdf_path):
                         "DescSigno": "",
                         "Monto": monto_pendiente["Monto"],
                         "Saldo": monto_pendiente["Saldo"],
+                        "Lado": monto_pendiente.get("Lado"),
                     }
-                    monto_pendiente = {"Monto": None, "Saldo": None}
+                    monto_pendiente = {"Monto": None, "Saldo": None, "Lado": None}
                     es_linea_nueva = True
                 else:
                     # Continuación
@@ -333,7 +349,8 @@ def procesar_pdf(pdf_path):
                             "Descripcion": "",
                             "DescSigno": "",
                             "Monto": None,
-                            "Saldo": None
+                            "Saldo": None,
+                            "Lado": None,
                         }
                     es_linea_nueva = False
 
@@ -355,6 +372,7 @@ def procesar_pdf(pdf_path):
                         # monto (Cargos/Abonos ~283-380, según el estado).
                         if center_w < 415:
                             destino["Monto"] = val
+                            destino["Lado"] = _lado_por_columna(w['x1'])
                         else:
                             destino["Saldo"] = val
                     elif es_encabezado:
@@ -387,6 +405,7 @@ def procesar_pdf(pdf_path):
         "DescSigno",
         "Monto",
         "Saldo",
+        "Lado",
     ])
     df = df[df["Monto"].notna() | df["Saldo"].notna()]
     df = df.reset_index(drop=True)
@@ -421,6 +440,9 @@ def procesar_pdf(pdf_path):
 
         if monto is None:
             es_abono = None
+        elif fila["Lado"] in ("deposito", "retiro"):
+            # La columna donde se imprime el monto es la señal más confiable
+            es_abono = fila["Lado"] == "deposito"
         elif (saldo_anterior is not None and saldo_actual is not None
               and abs(saldo_anterior + monto - saldo_actual) < 0.005):
             es_abono = True
@@ -451,7 +473,7 @@ def procesar_pdf(pdf_path):
 
     df["Retiro"] = retiro
     df["Deposito"] = deposito
-    df = df.drop(columns=["Monto", "DescSigno"])
+    df = df.drop(columns=["Monto", "DescSigno", "Lado"])
     df = df[df["Retiro"].notna() | df["Deposito"].notna() | df["Saldo"].notna()]
 
     return df

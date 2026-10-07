@@ -34,7 +34,9 @@ def Scrap_Estado_BanBajio(ruta_archivo):
     tabla = formatear_tabla(tabla)
     return tabla
 
-RE_MONTO_TEXTO = re.compile(r"\$\s*-?[\d,]+(?:\.\d{2})?-?")
+RE_MONTO_TEXTO = re.compile(r"\$\s*-?[\d,]+(?:\.\d{2})?-?|-?[\d,]+\.\d{2}-?\s*USD\b")
+# Cuentas en dolares: los importes se imprimen como "18,575.00 USD 0.53 USD" (sin "$")
+RE_MONTO_USD = re.compile(r"(-?[\d,]+\.\d{2}-?)\s*USD\b")
 
 
 def _quitar_montos_propios(concepto):
@@ -113,7 +115,8 @@ def _extraer_movimientos_desde_texto(texto_pagina, anio_fallback=None):
             # descarta el movimiento incompleto del final (desde su línea con
             # fecha) y se conservan las líneas de detalle del movimiento previo.
             cola = texto[-3:]
-            fechas_cola = [i for i, linea in enumerate(cola) if re.match(r"\d{1,2} \w{3}", linea)]
+            fechas_cola = [i for i, linea in enumerate(cola)
+                           if re.match(r"\d{1,2} \w{3}", linea) and not RE_MONTO_TEXTO.search(linea)]
             if fechas_cola:
                 texto = texto[:len(texto) - 3 + fechas_cola[0]]
             else:
@@ -125,6 +128,11 @@ def _extraer_movimientos_desde_texto(texto_pagina, anio_fallback=None):
 def scrap_movimientos(movimientos):
     numero_movimiento = 0
     movimientos_identificados = []
+    # Cada producto (cuenta) abre su tabla con una linea "SALDO INICIAL": lo que
+    # siga hasta la primera fecha no es continuacion del movimiento anterior, y
+    # ese saldo es la referencia del primer movimiento del producto.
+    en_movimiento = False
+    saldo_inicial_pendiente = None
 
     for movimiento in movimientos:
         if not str(movimiento).strip():
@@ -135,17 +143,38 @@ def scrap_movimientos(movimientos):
         if any(movimiento_mayus.lstrip().startswith(marcador) for marcador in MARCADORES_FIN_MOVIMIENTOS):
             break
 
-        if re.match(r"\d{1,2} \w{3}",movimiento):
-            numero_movimiento += 1
-
-        if numero_movimiento == 0:
+        if movimiento_mayus.lstrip().startswith("SALDO INICIAL"):
+            en_movimiento = False
+            monto_inicial = re.search(r"-?[\d,]+\.\d{2}", str(movimiento))
+            saldo_inicial_pendiente = monto_inicial.group().replace(",", "") if monto_inicial else None
             continue
 
-        movimientos_identificados.append({"movimiento":movimiento,"numero_movimiento":numero_movimiento})
-        
+        saldo_inicial = None
+        if re.match(r"\d{1,2} \w{3}",movimiento):
+            numero_movimiento += 1
+            en_movimiento = True
+            saldo_inicial, saldo_inicial_pendiente = saldo_inicial_pendiente, None
+
+        if numero_movimiento == 0 or not en_movimiento:
+            continue
+
+        movimientos_identificados.append({"movimiento":movimiento,"numero_movimiento":numero_movimiento,"saldo_inicial":saldo_inicial})
+
     return pd.DataFrame(movimientos_identificados)
         
 def obtener_montos_movimiento(movimiento):
+    montos_usd = RE_MONTO_USD.findall(movimiento)
+    if montos_usd:
+        # Cuenta en dolares: "<monto> USD <saldo> USD" (solo saldo en el saldo inicial)
+        montos_usd = [m.replace(" ", "") for m in montos_usd]
+        saldo = montos_usd[-1]
+        monto = montos_usd[-2] if len(montos_usd) > 1 else 0
+        if str(monto)[-1] == "-":
+            monto = monto[:-1]
+            saldo = "-" + saldo
+        elif saldo.endswith("-"):
+            saldo = "-" + saldo[:-1]
+        return monto, saldo
     movimiento = movimiento.replace(" ","")
     movimiento = movimiento.split("$")
     if len(movimiento) == 2:
@@ -179,7 +208,7 @@ def unificar_movimiento(df):
 
 def unificar_tabla(movimmientos):
     if movimmientos.empty:
-        return pd.DataFrame(columns=["Descripcion", "Movimiento", "Monto", "Saldo"])
+        return pd.DataFrame(columns=["Descripcion", "Movimiento", "Monto", "Saldo", "SaldoInicial"])
 
     tabla = (
         movimmientos.groupby("numero_movimiento", sort=False)
@@ -187,11 +216,12 @@ def unificar_tabla(movimmientos):
             Descripcion=("movimiento", lambda serie: "|" + "|".join(serie.astype(str))),
             Monto=("Monto", "first"),
             Saldo=("Saldo", "first"),
+            SaldoInicial=("saldo_inicial", "first"),
         )
         .reset_index()
         .rename(columns={"numero_movimiento": "Movimiento"})
     )
-    return tabla[["Descripcion", "Movimiento", "Monto", "Saldo"]]
+    return tabla[["Descripcion", "Movimiento", "Monto", "Saldo", "SaldoInicial"]]
 
 def extraer_movimientos_estado_de_cuenta(estado):
     movimientos = []
@@ -226,6 +256,10 @@ def identificar_cargo_abono(df):
     monto = pd.to_numeric(df["Monto"].astype(str).str.replace(",", "", regex=False), errors="coerce")
 
     saldo_anterior = saldo.shift(1)
+    if "SaldoInicial" in df.columns:
+        # el primer movimiento de cada producto parte de su propio saldo inicial
+        saldo_inicial = pd.to_numeric(df["SaldoInicial"], errors="coerce")
+        saldo_anterior = saldo_anterior.where(saldo_inicial.isna(), saldo_inicial)
     saldo_ideal = (saldo_anterior + monto).round(2)
 
     mask_base = saldo.notna() & saldo_anterior.notna() & monto.notna()
